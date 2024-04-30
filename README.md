@@ -14,7 +14,7 @@ Learning Linear Circuits
 1. Clone a local copy of the repository:
 
 ```bash
-git clone git@github.com:maguzj/coupled_learning.git
+git clone git@github.com:maguzj/learning_circuit.git
 ```
 
 2. Create the environment. Follow one of these two options depending on your computer.

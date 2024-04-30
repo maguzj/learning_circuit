@@ -20,7 +20,6 @@ from jax import jit, vmap
 from voronoi_utils import get_voronoi_polygons
 import cmocean
 
-# @dataclass
 class Circuit(object):
     ''' Class to simulate a circuit with trainable conductances 
     

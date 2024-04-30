@@ -27,7 +27,7 @@ class learning(Circuit):
     pts : np.array
         Positions of the nodes.
     '''
-    def __init__(self,graph, conductances, name = 'circuit', learning_rate=1.0, min_k = 1.e-6, max_k = 1.e6, jax = False, loss_history = None, checkpoint_iterations = None, power_history = None, energy_history = None, best_conductances = None, best_error = None):
+    def __init__(self,graph, conductances, name = 'circuit', min_k = 1.e-6, max_k = 1.e6, jax = False, loss_history = None, checkpoint_iterations = None, power_history = None, energy_history = None, best_conductances = None, best_error = None):
         ''' Initialize the coupled learning circuit.
 
         Parameters
@@ -41,7 +41,6 @@ class learning(Circuit):
         self.jax = jax
         self.set_conductances(conductances)
         self.name = name
-        self.learning_rate = learning_rate
         
         self.min_k = min_k
         self.max_k = max_k
@@ -155,7 +154,7 @@ class learning(Circuit):
     @jit
     def s_mse(conductances, incidence_matrix, Q_inputs, Q_outputs, inputs, true_outputs):
         ''' Compute the mean square error for batches of inputs and outputs. '''
-        batch_mse = vmap(CL.s_mse_single, in_axes=(None, None, None, None, 0, 0))
+        batch_mse = vmap(learning.s_mse_single, in_axes=(None, None, None, None, 0, 0))
         mse_values = batch_mse(conductances, incidence_matrix, Q_inputs, Q_outputs, inputs, true_outputs)
         return jnp.mean(mse_values) 
 
@@ -163,14 +162,14 @@ class learning(Circuit):
     @jit
     def s_grad_mse(conductances, incidence_matrix, Q_inputs, Q_outputs, inputs, true_output):
         ''' Compute the gradient of the mean square error. '''
-        grad_func = jax.grad(CL.s_mse, argnums=0)
+        grad_func = jax.grad(learning.s_mse, argnums=0)
         return grad_func(conductances, incidence_matrix, Q_inputs, Q_outputs, inputs, true_output)
 
     @staticmethod
     @jit
     def s_hessian_mse(conductances, incidence_matrix, Q_inputs, Q_outputs, inputs, true_output):
         ''' Compute the hessian of the mean square error. '''
-        hessian_func = jax.hessian(CL.s_mse, argnums=0)
+        hessian_func = jax.hessian(learning.s_mse, argnums=0)
         return hessian_func(conductances, incidence_matrix, Q_inputs, Q_outputs, inputs, true_output)
         
     
@@ -237,6 +236,8 @@ class learning(Circuit):
         '''
 
         epochs = tqdm(range(n_epochs))
+        self.learning_rate = learning_rate
+        self.eta = eta
 
         # training
         self.Q_clamped = hstack([self.Q_inputs, self.Q_outputs])
@@ -268,7 +269,7 @@ class learning(Circuit):
                 self.power_history.append(power_per_epoch)
                 self.energy_history.append(self.current_energy)
                 if save_state:
-                    self.save_local(save_path+'.csv')
+                    self.save_local(save_path+'_conductances.csv')
             epochs.set_description('Epoch: {}/{} | Loss: {:.2e}'.format(epoch,n_epochs, loss_per_epoch))
         # end of training
         if save_global:
@@ -292,7 +293,7 @@ class learning(Circuit):
         delta_conductances: np.array
             Change in conductances.
         '''
-        delta_conductances = CL.s_grad_mse(conductances, incidence_matrix, Q_inputs, Q_outputs, circuit_batch[0], circuit_batch[1])
+        delta_conductances = learning.s_grad_mse(conductances, incidence_matrix, Q_inputs, Q_outputs, circuit_batch[0], circuit_batch[1])
         return delta_conductances
 
     def train_GD(self, learning_rate, train_data, n_epochs, save_global = False, save_state = False, save_path = 'trained_circuit', save_every = 1):
@@ -300,6 +301,7 @@ class learning(Circuit):
         Have n_save_points save points, where the state of the circuit is saved if save_state is True.
         '''
 
+        self.learning_rate = learning_rate
         epochs = tqdm(range(n_epochs))
 
         # training
@@ -337,7 +339,7 @@ class learning(Circuit):
                 self.power_history.append(power_per_epoch)
                 self.energy_history.append(self.current_energy)
                 if save_state:
-                    self.save_local(save_path+'.csv')
+                    self.save_local(save_path+'_conductances.csv')
             epochs.set_description('Epoch: {}/{} | Loss: {:.2e}'.format(epoch,n_epochs, loss_per_epoch))
 
         # end of training
@@ -390,7 +392,7 @@ class learning(Circuit):
 	*****************************************************************************************************
 	*****************************************************************************************************
 
-										SAVE AND EXPORT
+										SAVE, LOAD, AND EXPORT
 
 	*****************************************************************************************************
 	*****************************************************************************************************
@@ -398,14 +400,6 @@ class learning(Circuit):
 
     def save_graph(self, path):
         ''' Save the graph of the circuit in JSON format '''
-        # first save the nodes ids, and their positions, then save the edges
-        # with open(path, 'w') as f:
-        #     f.write('{\n')
-        #     f.write('\t"nodes": {},\n'.format(list(self.graph.nodes)))
-        #     f.write('\t"pts": {},\n'.format(self.pts.tolist()))
-        #     f.write('\t"edges": {}\n'.format(list(self.graph.edges)))
-        #     f.write('}')
-        
         with open(path, 'w') as f:
             json.dump({
                 "nodes":list(self.graph.nodes),
@@ -413,98 +407,51 @@ class learning(Circuit):
                 "edges":list(self.graph.edges)},f)
 
     def save_global(self, path):
-        ''' Save the attributes of the circuit in JSON format. '''
-        # create a dictionary with the attributes
-        if jax:
-            losses = jax.device_get(jnp.array(self.losses)).astype(float).tolist()
-            energies = jax.device_get(jnp.array(self.energy)).astype(float).tolist()
-            powers = jax.device_get(jnp.array(self.power)).astype(float).tolist()
-        dic = {
-            "name": self.name,
-            "n": self.n,
-            "ne": self.ne,
-            "learning_rate": self.learning_rate,
-            "learning_step": self.learning_step,
-            "epoch": self.epoch,
-            "jax": self.jax,
-            "min_k": self.min_k,
-            "max_k": self.max_k,
-            "indices_source": self.indices_source.tolist(),
-            # "inputs_source": self.inputs_source.tolist(),
-            "indices_target": self.indices_target.tolist(),
-            # "outputs_target": self.outputs_target.tolist(),
-            "target_type": self.target_type,
-            "losses": losses,
-            "energy": energies,
-            "power": powers,
-            "end_epoch": self.end_epoch
-        }
+        ''' 
+        Save the attributes of the circuit in JSON format to the specified path.
 
-        # Handle best_conductances (new attribute) to be back compatible
-        if hasattr(self, 'best_conductances'):
-            if self.jax:
-                best_conductances = jax.device_get(jnp.array(self.best_conductances)).astype(float).tolist()
-            else:
-                best_conductances = np.array(self.best_conductances).astype(float).tolist()
-        else:
-            best_conductances = None
-        dic['best_conductances'] = best_conductances
-        # Handle best_error (new attribute) to be back compatible
-        if hasattr(self, 'best_error'):
-            if self.jax:
-                best_error = jax.device_get(jnp.array(self.best_error)).astype(float).tolist()
-            else:
-                best_error = np.array(self.best_error).astype(float).tolist()
-        else:
-            best_error = None
-        # if not hasattr(self, 'best_error'):
-        #     best_error = None
-        dic['best_error'] = best_error
+        Parameters:
+            path (str): The file path where the JSON data should be written.
 
-        if hasattr(self, 'inputs_source'):
-            dic['inputs_source'] = self.inputs_source.tolist()
+        Raises:
+            ValueError: If any attribute is not JSON-serializable.
+            IOError: If there is an error writing to the file.
+        '''
+        try:
+            # Dictionary comprehension to clean and convert data
+            dic = {
+                "name": self.name,
+                "n": self.n,
+                "ne": self.ne,
+                "learning_rate": self.learning_rate,
+                "learning_step": self.learning_step,
+                "jax": self.jax,
+                "min_k": self.min_k,
+                "max_k": self.max_k,
+                "indices_inputs": to_json_compatible(self.indices_inputs),
+                "indices_outputs": to_json_compatible(self.indices_outputs),
+                "current_bool": to_json_compatible(self.current_bool),
+                "loss_history": to_json_compatible(self.loss_history),
+                "energy_history": to_json_compatible(self.energy_history),
+                "power_history": to_json_compatible(self.power_history),
+                "checkpoint_iterations": to_json_compatible(self.checkpoint_iterations),
+                "best_conductances": to_json_compatible(self.best_conductances),
+                "best_error": to_json_compatible(self.best_error),
+            }
+
+            # Writing to file
+            with open(path, 'w') as file:
+                json.dump(dic, file, indent=4)
+            print("Data successfully saved to JSON.")
+        except TypeError as e:
+            print(f"Error converting to JSON: {e}")
+        except IOError as e:
+            print(f"Error writing to file: {e}")
         
-        if hasattr(self, 'outputs_target'):
-            dic['outputs_target'] = self.outputs_target.tolist()
-        if hasattr(self, 'task_type'):
-            dic['task_type'] = self.task_type
-        
-
-        # save the dictionary in JSON format
-        with open(path, 'w') as f:
-            json.dump(dic, f)
-
-        # with open(path, 'w') as f:
-        #     f.write('{\n')
-        #     f.write('\t"name": "{}",\n'.format(self.name))
-        #     f.write('\t"n": {},\n'.format(self.n))
-        #     f.write('\t"ne": {},\n'.format(self.ne))
-        #     f.write('\t"learning_rate": {},\n'.format(self.learning_rate))
-        #     f.write('\t"learning_step": {},\n'.format(self.learning_step))
-        #     f.write('\t"epoch": {},\n'.format(self.epoch))
-        #     # f.write('\t"jax": {},\n'.format(str(self.jax)))
-        #     f.write('\t"min_k": {},\n'.format(self.min_k))
-        #     f.write('\t"max_k": {},\n'.format(self.max_k))
-        #     f.write('\t"indices_source": {},\n'.format(self.indices_source.tolist()))
-        #     f.write('\t"inputs_source": {},\n'.format(self.inputs_source.tolist()))
-        #     f.write('\t"indices_target": {},\n'.format(self.indices_target.tolist()))
-        #     f.write('\t"outputs_target": {},\n'.format(self.outputs_target.tolist()))
-        #     f.write('\t"target_type": "{}",\n'.format(self.target_type))
-
-        #     f.write('\t"losses": {},\n'.format(self.losses))
-        #     f.write('\t"end_epoch": {}\n'.format(self.end_epoch))
-        #     f.write('}')
 
     def save_local(self, path):
         ''' Save the current conductances in CSV format. '''
         # if the file already exists, append the conductances to the file
-        # if os.path.isfile(path):
-        #     with open(path, 'a') as f:
-        #         f.write('{}\n'.format(self.conductances.tolist()))
-        # # if the file does not exist, create it and write the conductances
-        # else:
-        #     with open(path, 'w') as f:
-        #         f.write('{}\n'.format(self.conductances.tolist()))
         if self.learning_step == 0:
             save_to_csv(path, self.conductances.tolist(), mode='w')
         else:
@@ -577,6 +524,10 @@ class learning(Circuit):
         
         if not isinstance(self.Q_inputs, jnp.ndarray):
             self.Q_inputs = jnp.array(self.Q_inputs.todense())
+            converted = True
+        
+        if not isinstance(self.Q_outputs, jnp.ndarray):
+            self.Q_outputs = jnp.array(self.Q_outputs.todense())
             converted = True
 
         if not isinstance(self.Q_clamped, jnp.ndarray):
@@ -675,36 +626,6 @@ def split_data_into_batches( input_data, output_data, batch_size):
 
         return batches
 
-def load_circuit(path):
-    ''' Load a circuit. '''
-    with open(path, 'rb') as f:
-        circuit = pickle.load(f)
-    return circuit
-
-
-
-def log_partition(N, M):
-    if M > N:
-        raise ValueError('M cannot be larger than N')
-    # Create a logarithmically spaced array between 0 and N
-    log_space = np.logspace(0, np.log10(N), M, endpoint=True, base=10.0)
-    # Round the elements to the nearest integers
-    log_space = np.rint(log_space).astype(int)
-    # Calculate the differences between consecutive elements
-    intervals = np.diff(log_space)
-    # Ensure that no interval has a size of 0
-    for i in range(len(intervals)):
-        if intervals[i] == 0:
-            intervals[i] += 1
-    # Append N (the last element of the sequence) to the intervals
-    intervals = np.append(intervals, N)
-    # Adjust the intervals until they add up to N
-    while np.sum(intervals) < N:
-        intervals[np.argmin(intervals)] += 1
-    while np.sum(intervals) > N:
-        intervals[np.argmax(intervals)] -= 1
-    return intervals.tolist()
-
 def save_to_csv(filename, data, mode='a'):
     """
     Save data to a CSV file.
@@ -736,100 +657,78 @@ def load_from_csv(filename):
     return data
 
 
-def CL_from_file(jsonfile_global, jsonfile_graph, csv_local=None, new_train=False):
-    # create a CL object from a json file
-    with open(jsonfile_global, 'r') as f:
-        data_global = json.load(f)
-    with open(jsonfile_graph, 'r') as f:
-        data_graph = json.load(f)
-    
-    # extract the attributes
+def to_json_compatible(item):
+    ''' Convert JAX arrays to JSON compatible formats, assuming item is a JAX array. '''
+    if isinstance(item, (jnp.ndarray, np.ndarray)):
+        return np.array(item).tolist()  # np.array() ensures compatibility and handles JAX arrays too
+    return item
+
+
+import json
+import numpy as np
+import jax.numpy as jnp
+
+def load_json(file_path):
+    with open(file_path, 'r') as file:
+        return json.load(file)
+
+def get_array(data, key, default, use_jax):
+    array_data = data.get(key, default)
+    if array_data is not None:
+        return jnp.array(array_data) if use_jax else np.array(array_data)
+    return None
+
+def create_cl_from_json(jsonfile_global, jsonfile_graph, csv_local=None, new_train=False):
+    # Load data from JSON files
+    data_global = load_json(jsonfile_global)
+
+    # Graph and Conductances
     graph = network_from_json(jsonfile_graph)
     if csv_local:
-        conductances = load_from_csv(csv_local)[-1]
+        conductances = load_from_csv(csv_local)[-1] 
     else:
         conductances = np.ones(len(graph.edges))
 
-    learning_rate = data_global['learning_rate']
-    min_k = data_global['min_k']
-    max_k = data_global['max_k']
-    name = data_global['name']
-    jax = data_global['jax']
+    # Use JAX or NumPy based on the 'jax' attribute from JSON
+    use_jax = data_global['jax']
+    array_type = jnp if use_jax else np
+    conductances = array_type.array(conductances)
 
-    if new_train:
-        losses = None
-        energies = None
-        powers = None
-        end_epoch = None
-        learning_step = 0
+    # Manage training-related data
+    training_defaults = {'loss_history': None, 'energy_history': None, 'power_history': None, 'checkpoint_iterations': None, 'learning_step': 0}
+    if not new_train:
+        training_data = {key: data_global[key] for key in ['loss_history', 'energy_history', 'power_history', 'checkpoint_iterations', 'learning_step']}
     else:
-        losses = data_global['losses']
-        energies = data_global['energy']
-        powers = data_global['power']
-        end_epoch = data_global['end_epoch']
-        learning_step = data_global['learning_step']
+        training_data = training_defaults
 
-    # extract the task
-    indices_source = np.array(data_global['indices_source'])
-    # inputs_source = np.array(data_global['inputs_source'])
-    indices_target = np.array(data_global['indices_target'])
-    # outputs_target = np.array(data_global['outputs_target'])
-    target_type = data_global['target_type']
-    inputs_source = data_global.get('inputs_source')
-    outputs_target = data_global.get('outputs_target')
-    if inputs_source is not None:
-        if jax:
-            inputs_source = jnp.array(inputs_source)
-        else:
-            inputs_source = np.array(inputs_source)
-    if outputs_target is not None:
-        if jax:
-            outputs_target = jnp.array(outputs_target)
-        else:
-            outputs_target = np.array(outputs_target)
+    # Task-specific settings
+    indices_inputs = get_array(data_global, 'indices_inputs', None, use_jax)
+    indices_outputs = get_array(data_global, 'indices_outputs', None, use_jax)
 
-    if jax:
-        conductances = jnp.array(conductances)
-        indices_source = jnp.array(indices_source)
-        # inputs_source = jnp.array(inputs_source)
-        indices_target = jnp.array(indices_target)
-        # outputs_target = jnp.array(outputs_target)
-
-    # handle best_conductances (new attribute) to be back compatible
-    best_conductances = data_global.get('best_conductances')
-    if best_conductances is not None:
-        if jax:
-            best_conductances = jnp.array(best_conductances)
-        else:
-            best_conductances = np.array(best_conductances)
-    # handle best_error (new attribute) to be back compatible
-    best_error = data_global.get('best_error')
-    task_type = data_global.get('task_type')
+    # Create the learning object
+    circuit = learning(
+        graph,
+        conductances,
+        name = data_global['name'],
+        min_k = data_global['min_k'],
+        max_k = data_global['max_k'],
+        jax = use_jax,
+        loss_history = training_data['loss_history'],
+        checkpoint_iterations = training_data['checkpoint_iterations'],
+        power_history = training_data['power_history'],
+        energy_history = training_data['energy_history'],
+        best_conductances = get_array(data_global, 'best_conductances', None, use_jax),
+        best_error = data_global.get('best_error')
+        )
     
+    # Set some attributes
+    circuit.learning_rate = data_global['learning_rate']
 
 
-    allo = CL(graph, conductances, learning_rate, learning_step, min_k, max_k, name, jax, losses, end_epoch, power = powers, energy = energies, best_conductances = best_conductances, best_error = best_error)
+    # Set task
+    current_bool = get_array(data_global, 'current_bool', None, use_jax)
+    _ = circuit.set_inputs(indices_inputs, current_bool)
+    _ = circuit.set_outputs(indices_outputs)
 
-    if task_type is None:
-        if jax:
-            allo.jax_set_task(indices_source, inputs_source, indices_target, outputs_target, target_type)
-        else:
-            allo.set_task(indices_source, inputs_source, indices_target, outputs_target, target_type)   
-    else:
-        if task_type == 'allostery':
-            if jax:
-                allo.jax_set_task(indices_source, inputs_source, indices_target, outputs_target, target_type)
-            else:
-                allo.set_task(indices_source, inputs_source, indices_target, outputs_target, target_type)
-        elif task_type == 'regression':
-            if jax:
-                if outputs_target is not None:
-                    allo.set_regression_matrix(outputs_target)
-                allo.jax_set_task_regression(indices_source, indices_target, target_type, task_type)
-            else:
-                allo.set_regression_matrix(outputs_target)
-                allo.set_task_regression(indices_source, indices_target, target_type, task_type)
-        else:
-            raise Exception('task_type must be "allostery" or "regression"')
+    return circuit
 
-    return allo
