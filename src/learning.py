@@ -659,7 +659,7 @@ def load_from_csv(filename):
 
 def to_json_compatible(item):
     ''' Convert JAX arrays to JSON compatible formats, assuming item is a JAX array. '''
-    if isinstance(item, (jnp.ndarray, np.ndarray)):
+    if isinstance(item, (jnp.ndarray, np.ndarray, list)):
         return np.array(item).tolist()  # np.array() ensures compatibility and handles JAX arrays too
     return item
 
