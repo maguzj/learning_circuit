@@ -230,12 +230,15 @@ class learning(Circuit):
 
         return delta_conductances, mse
 
-    def train_CL(self, learning_rate, eta, train_data, n_epochs, save_global = False, save_state = False, save_path = 'trained_circuit', save_every = 1):
+    def train_CL(self, learning_rate, eta, train_data, n_epochs, save_global = False, save_state = False, save_path = 'trained_circuit', save_every = 1,verbose=True):
         ''' Train the circuit for n_epochs. Each epoch consists of one passage of all the train_data.
         Have n_save_points save points, where the state of the circuit is saved if save_state is True.
         '''
 
-        epochs = tqdm(range(n_epochs))
+        if verbose:
+            epochs = tqdm(range(n_epochs))
+        else:
+            epochs = range(n_epochs)
         self.learning_rate = learning_rate
         self.eta = eta
 
@@ -270,7 +273,8 @@ class learning(Circuit):
                 self.energy_history.append(self.current_energy)
                 if save_state:
                     self.save_local(save_path+'_conductances.csv')
-            epochs.set_description('Epoch: {}/{} | Loss: {:.2e}'.format(epoch,n_epochs, loss_per_epoch))
+            if verbose:
+                epochs.set_description('Epoch: {}/{} | Loss: {:.2e}'.format(epoch,n_epochs, loss_per_epoch))
         # end of training
         if save_global:
             self.save_global(save_path+'_global.json')
@@ -301,8 +305,11 @@ class learning(Circuit):
         Have n_save_points save points, where the state of the circuit is saved if save_state is True.
         '''
 
+        if verbose:
+            epochs = tqdm(range(n_epochs))
+        else:
+            epochs = range(n_epochs)
         self.learning_rate = learning_rate
-        epochs = tqdm(range(n_epochs))
 
         # training
         n_batches = len(train_data) 
@@ -340,7 +347,8 @@ class learning(Circuit):
                 self.energy_history.append(self.current_energy)
                 if save_state:
                     self.save_local(save_path+'_conductances.csv')
-            epochs.set_description('Epoch: {}/{} | Loss: {:.2e}'.format(epoch,n_epochs, loss_per_epoch))
+            if verbose:
+                epochs.set_description('Epoch: {}/{} | Loss: {:.2e}'.format(epoch,n_epochs, loss_per_epoch))
 
         # end of training
         if save_global:
@@ -530,9 +538,9 @@ class learning(Circuit):
             self.Q_outputs = jnp.array(self.Q_outputs.todense())
             converted = True
 
-        if not isinstance(self.Q_clamped, jnp.ndarray):
-            self.Q_clamped = jnp.array(self.Q_clamped.todense())
-            converted = True
+        # if not isinstance(self.Q_clamped, jnp.ndarray):
+        #     self.Q_clamped = jnp.array(self.Q_clamped.todense())
+        #     converted = True
 
         if not isinstance(self.incidence_matrix, jnp.ndarray):
             self.incidence_matrix = jnp.array(self.incidence_matrix.todense())
@@ -558,9 +566,10 @@ class learning(Circuit):
             self.Q_inputs = csr_matrix(self.Q_inputs, dtype = np.float64)
             converted = True
 
-        if isinstance(self.Q_clamped, jnp.ndarray):
-            self.Q_clamped = csr_matrix(self.Q_clamped, dtype = np.float64)
-            converted = True
+        if hasattr(self, "Q_clamped"):
+            if isinstance(self.Q_clamped, jnp.ndarray):
+                self.Q_clamped = csr_matrix(self.Q_clamped, dtype = np.float64)
+                converted = True
 
         if isinstance(self.incidence_matrix, jnp.ndarray):
             self.incidence_matrix = csc_array(self.incidence_matrix, dtype = np.float64)
