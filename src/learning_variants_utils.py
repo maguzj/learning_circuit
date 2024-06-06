@@ -1,10 +1,10 @@
-from cl_utils import *
+from learning import *
 import jax
 import json
 import csv
 from jax import jit
 
-class restricted_CL(CL):
+class restricted_CL(learning):
     @staticmethod
     @jit
     def _threshold_sstep_GD_NA(threshold,conductances, incidence_matrix, Q, inputs_source, indices_target, outputs_target, learning_rate, min_k, max_k):
@@ -114,3 +114,101 @@ class restricted_CL(CL):
             self.save_global(save_path+'_global.json')
             self.save_graph(save_path+'_graph.json')
         return self.losses, conductances
+
+
+
+
+
+class robust_CL(learning):
+    def _dk_DA(self, batch):
+        ''' Compute the change in conductances, dk, according to the input,output data in the batch using Directed Aging.
+        The new conductances are computed as: k_new = k_old - learning_rate*dk. 
+        
+        Parameters
+        ----------
+        learning_rate : float
+            Learning rate.
+        batch : tuple of np.array
+            Tuple of input_data and true_output data.
+
+        Returns
+        -------
+        delta_conductances: np.array
+            Change in conductances.
+        mse : float
+            Mean square error.
+        '''
+        delta_conductances = np.zeros(self.ne)
+        batch_size = len(batch[0])
+        mse = 0
+        power = 0
+
+        for input_data, true_output in zip(*batch):
+            input_vector = self.circuit_input(input_data, self.indices_inputs, self.current_bool)
+            free_state = self.solve(self.Q_inputs, input_vector)
+            output_data = self.Q_outputs.T.dot(free_state)
+            mse += self.mse(output_data, true_output)
+            # nudge = output_data + eta * (true_output - output_data)
+            # clamped_input_vector = np.concatenate((input_vector, nudge))
+            # clamped_state = self.solve(Q_clamped, clamped_input_vector)
+            voltage_drop_free = self.incidence_matrix.T.dot(free_state)
+            # voltage_drop_clamped = self.incidence_matrix.T.dot(clamped_state)
+            power = power + np.sum(self.conductances*(voltage_drop_free**2))
+            self.current_energy += power
+            delta_conductances = delta_conductances + voltage_drop_free**2
+
+        delta_conductances = delta_conductances/batch_size
+        mse = mse/batch_size
+        self.current_power = power/batch_size
+
+        return delta_conductances, mse
+
+    def train_DA(self, learning_rate, train_data, n_epochs, save_global = False, save_state = False, save_path = 'trained_circuit', save_every = 1,verbose=True):
+        ''' Train the circuit for n_epochs. Each epoch consists of one passage of all the train_data.
+        Have n_save_points save points, where the state of the circuit is saved if save_state is True.
+        '''
+
+        if verbose:
+            epochs = tqdm(range(n_epochs))
+        else:
+            epochs = range(n_epochs)
+        self.learning_rate = learning_rate
+
+        # training
+        n_batches = len(train_data)
+        for epoch in epochs:
+            indices = np.random.permutation(n_batches)
+            loss_per_epoch = 0
+            power_per_epoch = 0
+            for i in indices:
+                batch = train_data[i]
+                delta_conductances, loss = self._dk_DA(batch)
+                loss_per_epoch += loss
+                power_per_epoch += self.current_power
+                # the loss is prior to the update of the conductances
+                if loss < self.best_error:
+                    self.best_error = loss
+                    self.best_conductances = self.conductances
+                # update
+                self.conductances = self.conductances - learning_rate*delta_conductances
+                self._clip_conductances()
+                self.learning_step = self.learning_step + 1
+            
+            loss_per_epoch = loss_per_epoch/n_batches
+            power_per_epoch = power_per_epoch/n_batches
+            # save
+            if epoch % save_every == 0:
+                self.loss_history.append(loss_per_epoch)
+                self.checkpoint_iterations.append(self.learning_step - 1)
+                self.power_history.append(power_per_epoch)
+                self.energy_history.append(self.current_energy)
+                if save_state:
+                    self.save_local(save_path+'_conductances.csv')
+            if verbose:
+                epochs.set_description('Epoch: {}/{} | Loss: {:.2e}'.format(epoch,n_epochs, loss_per_epoch))
+        # end of training
+        if save_global:
+            self.save_global(save_path+'_global.json')
+            self.save_graph(save_path+'_graph.json')
+
+        return self.checkpoint_iterations, self.loss_history, self.power_history, self.energy_history
