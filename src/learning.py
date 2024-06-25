@@ -183,7 +183,7 @@ class learning(Circuit):
 	*****************************************************************************************************
     '''
 
-    def _dk_CL(self, eta, batch, Q_clamped):
+    def _dk_CL(self, eta, batch, Q_clamped, Q_outputs):
         ''' Compute the change in conductances, dk, according to the input,output data in the batch using Coupled Learning.
         The new conductances are computed as: k_new = k_old - learning_rate*dk. 
         
@@ -213,7 +213,7 @@ class learning(Circuit):
         for input_data, true_output in zip(*batch):
             input_vector = self.circuit_input(input_data, self.indices_inputs, self.current_bool)
             free_state = self.solve(self.Q_inputs, input_vector)
-            output_data = self.Q_outputs.T.dot(free_state)
+            output_data = Q_outputs.T.dot(free_state)
             mse += self.mse(output_data, true_output)
             nudge = output_data + eta * (true_output - output_data)
             clamped_input_vector = np.concatenate((input_vector, nudge))
@@ -251,7 +251,7 @@ class learning(Circuit):
             power_per_epoch = 0
             for i in indices:
                 batch = train_data[i]
-                delta_conductances, loss = self._dk_CL(eta, batch, self.Q_clamped)
+                delta_conductances, loss = self._dk_CL(eta, batch, self.Q_clamped, self.Q_outputs)
                 loss_per_epoch += loss
                 power_per_epoch += self.current_power
                 # the loss is prior to the update of the conductances
@@ -266,7 +266,7 @@ class learning(Circuit):
             loss_per_epoch = loss_per_epoch/n_batches
             power_per_epoch = power_per_epoch/n_batches
             # save
-            if epoch % save_every == 0:
+            if (epoch + 1) % save_every == 0:
                 self.loss_history.append(loss_per_epoch)
                 self.checkpoint_iterations.append(self.learning_step - 1)
                 self.power_history.append(power_per_epoch)
@@ -340,7 +340,7 @@ class learning(Circuit):
             loss_per_epoch = loss_per_epoch/n_batches
             power_per_epoch = power_per_epoch/n_batches
             # save
-            if epoch % save_every == 0:
+            if (epoch + 1) % save_every == 0:
                 self.loss_history.append(loss_per_epoch)
                 self.checkpoint_iterations.append(self.learning_step - 1)
                 self.power_history.append(power_per_epoch)
