@@ -296,3 +296,138 @@ class robust_CL(learning):
             self.save_graph(save_path+'_graph.json')
 
         return self.checkpoint_iterations, self.loss_history, self.power_history, self.energy_history
+
+    def train_CL_tandem_random(self, lr_1, eta_1, lr_2, eta_2, train_data_1, train_data_2, n_epochs,n_outputs_r, save_global = False, save_state = False, save_path = 'trained_circuit', save_every = 1,verbose=True):
+        ''' Train the circuit for n_epochs. Each epoch consists of one passage of all the train_data.
+        Have n_save_points save points, where the state of the circuit is saved if save_state is True.
+        '''
+
+        if verbose:
+            epochs = tqdm(range(n_epochs))
+        else:
+            epochs = range(n_epochs)
+        self.learning_rate = lr_1
+        self.eta = eta_1
+
+        edges = np.array(self.graph.edges)
+        filtered_edges = np.array([edge for edge in edges if not np.any(np.isin(edge, self.indices_inputs))])
+
+        # training
+        self.Q_clamped = hstack([self.Q_inputs, self.Q_outputs])
+        n_batches_1 = len(train_data_1)
+        n_batches_2 = len(train_data_2)
+        for epoch in epochs:
+            indices_1 = np.random.permutation(n_batches_1)
+            indices_2 = np.random.permutation(n_batches_2)
+            loss_per_epoch = 0
+            power_per_epoch = 0
+
+            # robust training
+            for i in indices_2:
+                batch_2 = train_data_2[i]
+                # pick random outputs
+                indices_outputs_robustness = filtered_edges[np.random.choice(np.arange(len(filtered_edges)), n_outputs_r, replace=False)]
+                self.set_outputs2(indices_outputs_robustness)
+                self.Q_clamped_2 = hstack([self.Q_inputs, self.Q_outputs2])
+                delta_conductances, loss = self._dk_CL(eta_2, batch_2, self.Q_clamped_2, self.Q_outputs2)
+                # update
+                self.conductances = self.conductances - lr_2*delta_conductances
+                self._clip_conductances()
+                self.learning_step = self.learning_step + 1
+            # original training
+            for i in indices_1:
+                batch_1 = train_data_1[i]
+                delta_conductances, loss = self._dk_CL(eta_1, batch_1, self.Q_clamped, self.Q_outputs)
+                loss_per_epoch += loss
+                power_per_epoch += self.current_power
+                # the loss is prior to the update of the conductances
+                if loss < self.best_error:
+                    self.best_error = loss
+                    self.best_conductances = self.conductances
+                # update
+                self.conductances = self.conductances - lr_1*delta_conductances
+                self._clip_conductances()
+                self.learning_step = self.learning_step + 1
+            
+            loss_per_epoch = loss_per_epoch/n_batches_1
+            power_per_epoch = power_per_epoch/n_batches_1
+            # save
+            if (epoch + 1) % save_every == 0:
+                self.loss_history.append(loss_per_epoch)
+                self.checkpoint_iterations.append(self.learning_step - 1)
+                self.power_history.append(power_per_epoch)
+                self.energy_history.append(self.current_energy)
+                if save_state:
+                    self.save_local(save_path+'_conductances.csv')
+            if verbose:
+                epochs.set_description('Epoch: {}/{} | Loss: {:.2e}'.format(epoch,n_epochs, loss_per_epoch))
+        # end of training
+        if save_global:
+            self.save_global(save_path+'_global.json')
+            self.save_graph(save_path+'_graph.json')
+
+        return self.checkpoint_iterations, self.loss_history, self.power_history, self.energy_history
+
+
+    def train_CL_DA_tandem(self, lr_1, eta_1, lr_2, train_data_1, n_epochs, save_global = False, save_state = False, save_path = 'trained_circuit', save_every = 1,verbose=True):
+        ''' Train the circuit for n_epochs. Each epoch consists of one passage of all the train_data.
+        Have n_save_points save points, where the state of the circuit is saved if save_state is True.
+        '''
+
+        if verbose:
+            epochs = tqdm(range(n_epochs))
+        else:
+            epochs = range(n_epochs)
+        self.learning_rate = lr_1
+        self.eta = eta_1
+
+        # training
+        self.Q_clamped = hstack([self.Q_inputs, self.Q_outputs])
+        n_batches_1 = len(train_data_1)
+        for epoch in epochs:
+            indices_1 = np.random.permutation(n_batches_1)
+            indices_2 = np.random.permutation(n_batches_1)
+            loss_per_epoch = 0
+            power_per_epoch = 0
+
+            # robust training
+            for i in indices_2:
+                batch_2 = train_data_1[i]
+                delta_conductances, loss = self._dk_DA(batch_2)
+                # update
+                self.conductances = self.conductances - lr_2*delta_conductances
+                self._clip_conductances()
+                self.learning_step = self.learning_step + 1
+            # original training
+            for i in indices_1:
+                batch_1 = train_data_1[i]
+                delta_conductances, loss = self._dk_CL(eta_1, batch_1, self.Q_clamped, self.Q_outputs)
+                loss_per_epoch += loss
+                power_per_epoch += self.current_power
+                # the loss is prior to the update of the conductances
+                if loss < self.best_error:
+                    self.best_error = loss
+                    self.best_conductances = self.conductances
+                # update
+                self.conductances = self.conductances - lr_1*delta_conductances
+                self._clip_conductances()
+                self.learning_step = self.learning_step + 1
+            
+            loss_per_epoch = loss_per_epoch/n_batches_1
+            power_per_epoch = power_per_epoch/n_batches_1
+            # save
+            if (epoch + 1) % save_every == 0:
+                self.loss_history.append(loss_per_epoch)
+                self.checkpoint_iterations.append(self.learning_step - 1)
+                self.power_history.append(power_per_epoch)
+                self.energy_history.append(self.current_energy)
+                if save_state:
+                    self.save_local(save_path+'_conductances.csv')
+            if verbose:
+                epochs.set_description('Epoch: {}/{} | Loss: {:.2e}'.format(epoch,n_epochs, loss_per_epoch))
+        # end of training
+        if save_global:
+            self.save_global(save_path+'_global.json')
+            self.save_graph(save_path+'_graph.json')
+
+        return self.checkpoint_iterations, self.loss_history, self.power_history, self.energy_history
