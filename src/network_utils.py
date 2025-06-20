@@ -24,6 +24,37 @@ def jammed_network(n, seed=0, relabel_nodes=True, rfac = 0.8, radius=0, params={
     
     return graph
 
+def complete_network(n, relabel_nodes=True, radius=1.0):
+    """
+    Parameters
+    ----------
+    n : int
+        Number of nodes.
+    relabel_nodes : bool, optional
+        If True (default) make sure nodes are 0…n-1.  Handy when you start
+        mixing graphs created in different ways.
+    radius : float, optional
+        Radius of the circle on which the nodes are placed.
+
+    Returns
+    -------
+    graph : networkx.Graph
+        Complete graph with 'pos' attributes set for plotting.
+    """
+    graph = nx.complete_graph(n)
+
+    # angular positions for a regular n-gon
+    angles = 2 * np.pi * np.arange(n) / n
+    for node, theta in zip(graph.nodes, angles):
+        graph.nodes[node]['pos'] = radius * np.array([np.cos(theta),
+                                                      np.sin(theta)])
+
+    if relabel_nodes:
+        # nodes are already 0…n-1, but this keeps the interface consistent
+        graph = nx.convert_node_labels_to_integers(graph)
+
+    return graph
+
 def network_from_json(filename):
     with open(filename) as f:
         data = json.load(f)
