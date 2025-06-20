@@ -79,6 +79,11 @@ class Circuit(object):
     def _s_hessian(conductances,incidence_matrix):
         ''' Compute the Hessian of the network with respect to the conductances. '''
         return 2*jnp.dot(incidence_matrix*conductances,jnp.transpose(incidence_matrix))
+    
+    @staticmethod
+    def _s_hessian_with_negative_couplings(conductances,deltap,deltam):
+        ''' Compute the Hessian of the network with respect to the generalized conductances. The incidence matrix is the difference of deltap and deltam '''
+        return 2*(jnp.dot(deltap*jnp.abs(conductances),jnp.transpose(deltap))+jnp.dot(deltam*jnp.abs(conductances),jnp.transpose(deltam))-jnp.dot(deltap*conductances,jnp.transpose(deltam))-jnp.dot(deltam*conductances,jnp.transpose(deltap)))
 
 
     def constraint_matrix(self, indices_nodes):
@@ -292,7 +297,52 @@ class Circuit(object):
         '''
         batch_solve = vmap(Circuit.s_solve, in_axes=(None, None, None, 0))
         return batch_solve(conductances, incidence_matrix, Q, input_vectors)
+    
 
+
+    @staticmethod
+    @jit
+    def s_solve_neg(conductances, deltap, deltam, Q, input_vector):
+        ''' Solve the circuit with the constraint matrix Q and the source vector input_vector.
+
+        Parameters
+        ----------
+        Q : jnp.array
+            Constraint matrix Q
+        input_vector : np.array
+            Source vector input_vector. input_vector has size self.n + len(indices_nodes).
+
+        Returns
+        -------
+        V : np.array
+            Solution vector V. V has size n.
+        '''
+        H = Circuit._s_extended_hessian(Circuit._s_hessian_with_negative_couplings(conductances,deltap, deltam),Q)
+        # f_extended = jnp.hstack([jnp.zeros(jnp.shape(incidence_matrix)[0]), f])
+        # solve the system
+        V = jax.scipy.linalg.solve(H, input_vector)[:jnp.shape(deltap)[0]]
+        return V
+
+
+    @staticmethod
+    @jit
+    def s_solve_batch_neg(conductances, deltap, deltam, Q, input_vectors):
+        ''' Solve the circuit with the constraint matrix Q and the source vector input_vector.
+
+        Parameters
+        ----------
+        Q : jnp.array
+            Constraint matrix Q
+        input_vector : np.array
+            Source vector input_vector. input_vector has size self.n + len(indices_nodes).
+
+        Returns
+        -------
+        V : np.array
+            Solution vector V. V has size n.
+        '''
+        batch_solve = vmap(Circuit.s_solve_neg, in_axes=(None, None, None, None, 0))
+        return batch_solve(conductances, deltap, deltam, Q, input_vectors)
     '''
 	*****************************************************************************************************
 	*****************************************************************************************************
