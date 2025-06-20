@@ -27,7 +27,7 @@ class learning(Circuit):
     pts : np.array
         Positions of the nodes.
     '''
-    def __init__(self,graph, conductances, name = 'circuit', min_k = 1.e-6, max_k = 1.e6, jax = False, loss_history = None, checkpoint_iterations = None, power_history = None, energy_history = None, best_conductances = None, best_error = None):
+    def __init__(self,graph, conductances, name = 'circuit', min_k = 1.e-6, max_k = 1.e6, jax = False, loss_history = None, checkpoint_iterations = None, power_history = None, energy_history = None, best_conductances = None, best_error = None, regularization = 0, center = 0):
         ''' Initialize the coupled learning circuit.
 
         Parameters
@@ -74,6 +74,9 @@ class learning(Circuit):
             self.best_error = np.inf
         else:
             self.best_error = best_error
+        
+        self.l2 = regularization
+        self.center = center
 
     def _clip_conductances(self):
         ''' Clip the conductances to be between min_k and max_k.
@@ -236,15 +239,40 @@ class learning(Circuit):
         '''
 
         if verbose:
-            epochs = tqdm(range(n_epochs))
+            epochs = tqdm(range(1,n_epochs+1))
         else:
-            epochs = range(n_epochs)
+            epochs = range(1,n_epochs+1)
         self.learning_rate = learning_rate
         self.eta = eta
 
-        # training
+        # set up
         self.Q_clamped = hstack([self.Q_inputs, self.Q_outputs])
         n_batches = len(train_data)
+
+        # initial error, power and energy. We run the training step without updating the conductances
+        if self.learning_step == 0:
+            indices = np.random.permutation(n_batches)
+            loss_per_epoch = 0
+            power_per_epoch = 0
+            for i in indices:
+                batch = train_data[i]
+                delta_conductances, loss = self._dk_CL(eta, batch, self.Q_clamped, self.Q_outputs)
+                loss_per_epoch += loss
+                power_per_epoch += self.current_power
+                # the loss is prior to the update of the conductances
+                if loss < self.best_error:
+                    self.best_error = loss
+                    self.best_conductances = self.conductances
+            loss_per_epoch = loss_per_epoch/n_batches
+            power_per_epoch = power_per_epoch/n_batches
+            self.loss_history.append(loss_per_epoch)
+            self.checkpoint_iterations.append(self.learning_step)
+            self.power_history.append(power_per_epoch)
+            self.energy_history.append(self.current_energy)
+            if save_state:
+                self.save_local(save_path+'_conductances.csv')
+            
+        # training
         for epoch in epochs:
             indices = np.random.permutation(n_batches)
             loss_per_epoch = 0
@@ -259,16 +287,19 @@ class learning(Circuit):
                     self.best_error = loss
                     self.best_conductances = self.conductances
                 # update
-                self.conductances = self.conductances - learning_rate*delta_conductances
+                if self.l2:
+                    self.conductances = self.conductances - learning_rate*(delta_conductances+self.l2*(self.conductances-self.center))
+                else:
+                    self.conductances = self.conductances - learning_rate*delta_conductances
                 self._clip_conductances()
                 self.learning_step = self.learning_step + 1
             
             loss_per_epoch = loss_per_epoch/n_batches
             power_per_epoch = power_per_epoch/n_batches
             # save
-            if (epoch + 1) % save_every == 0:
+            if epoch % save_every == 0:
                 self.loss_history.append(loss_per_epoch)
-                self.checkpoint_iterations.append(self.learning_step - 1)
+                self.checkpoint_iterations.append(self.learning_step)
                 self.power_history.append(power_per_epoch)
                 self.energy_history.append(self.current_energy)
                 if save_state:
@@ -300,19 +331,49 @@ class learning(Circuit):
         delta_conductances = learning.s_grad_mse(conductances, incidence_matrix, Q_inputs, Q_outputs, circuit_batch[0], circuit_batch[1])
         return delta_conductances
 
-    def train_GD(self, learning_rate, train_data, n_epochs, save_global = False, save_state = False, save_path = 'trained_circuit', save_every = 1):
+    def train_GD(self, learning_rate, train_data, n_epochs, save_global = False, save_state = False, save_path = 'trained_circuit', save_every = 1, verbose=True):
         ''' Train the circuit for n_epochs. Each epoch consists of one passage of all the train_data.
         Have n_save_points save points, where the state of the circuit is saved if save_state is True.
         '''
 
         if verbose:
-            epochs = tqdm(range(n_epochs))
+            epochs = tqdm(range(1,n_epochs+1))
         else:
-            epochs = range(n_epochs)
+            epochs = range(1,n_epochs+1)
         self.learning_rate = learning_rate
 
-        # training
+        # set up
         n_batches = len(train_data) 
+
+        # initial error, power and energy. We run the training step without updating the conductances
+        if self.learning_step == 0:
+            indices = np.random.permutation(n_batches)
+            loss_per_epoch = 0
+            power_per_epoch = 0
+            for i in indices:
+                batch = train_data[i]
+                circuit_batch = (Circuit.s_circuit_input_batch(batch[0], self.indices_inputs, self.current_bool, self.n), batch[1])
+                free_states = Circuit.s_solve_batch(self.conductances, self.incidence_matrix, self.Q_inputs, circuit_batch[0])
+                power_array = (free_states.dot(self.incidence_matrix)**2).dot(self.conductances)
+                self.current_power = np.mean(power_array)
+                self.current_energy += np.sum(power_array)
+                loss = self.mse(free_states.dot(self.Q_outputs),batch[1])
+                loss_per_epoch += loss
+                power_per_epoch += self.current_power
+                # the loss is prior to the update of the conductances
+                if loss < self.best_error:
+                    self.best_error = loss
+                    self.best_conductances = self.conductances
+            loss_per_epoch = loss_per_epoch/n_batches
+            power_per_epoch = power_per_epoch/n_batches
+            self.loss_history.append(loss_per_epoch)
+            self.checkpoint_iterations.append(self.learning_step)
+            self.power_history.append(power_per_epoch)
+            self.energy_history.append(self.current_energy)
+            if save_state:
+                self.save_local(save_path+'_conductances.csv')
+
+        # training
         for epoch in epochs:
             indices = np.random.permutation(n_batches)
             loss_per_epoch = 0
@@ -340,9 +401,9 @@ class learning(Circuit):
             loss_per_epoch = loss_per_epoch/n_batches
             power_per_epoch = power_per_epoch/n_batches
             # save
-            if (epoch + 1) % save_every == 0:
+            if epoch % save_every == 0:
                 self.loss_history.append(loss_per_epoch)
-                self.checkpoint_iterations.append(self.learning_step - 1)
+                self.checkpoint_iterations.append(self.learning_step)
                 self.power_history.append(power_per_epoch)
                 self.energy_history.append(self.current_energy)
                 if save_state:
