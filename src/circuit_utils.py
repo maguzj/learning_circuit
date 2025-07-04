@@ -19,6 +19,7 @@ import matplotlib.patheffects as path_effects
 from jax import jit, vmap
 from voronoi_utils import get_voronoi_polygons
 import cmocean
+from utils import *
 
 class Circuit(object):
     ''' Class to simulate a circuit with trainable conductances 
@@ -58,7 +59,7 @@ class Circuit(object):
 
         self.incidence_matrix = nx.incidence_matrix(self.graph, oriented=True)
         if jax:
-            self.incidence_matrix = jnp.array(self.incidence_matrix.todense())
+            self.incidence_matrix = jnp.array(self.incidence_matrix.toarray())
             
 
     def set_conductances(self, conductances):
@@ -173,6 +174,9 @@ class Circuit(object):
 	*****************************************************************************************************
 	'''
 
+
+    # Moved to utils.py
+    ####################
     def circuit_input(self, input_nodes, indices_nodes, current_bool):
         ''' Compute the input vector f for the circuit. 
         
@@ -229,7 +233,10 @@ class Circuit(object):
         batch_circuit_input = vmap(Circuit.s_circuit_input, in_axes=(0, None, None, None))
         return batch_circuit_input(input_nodes, indices_nodes, current_bool, n)
         
+    ####################
     
+
+
 
     def solve(self, Q, input_vector):
         ''' Solve the circuit with the constraint matrix Q and the input_vector.
@@ -248,12 +255,18 @@ class Circuit(object):
             Solution vector V. V has size n.
         '''
         assert len(input_vector) == self.n + Q.shape[1], "Source vector f has the wrong size."
-
-        H = self._extended_hessian(Q)
+        
+        H = extended_hessian(self.jax, hessian(self.jax, self.conductances, self.incidence_matrix), Q)
+        # H = self._extended_hessian(Q)
         # f_extended = np.hstack([np.zeros(self.n), f])
         # solve the system
         V = spsolve(H, input_vector)[:self.n]
         return V
+    
+    def solve_batch(self, Q, input_vectors):
+        # Loop over batch dimension and stack
+        Vs = [self.solve(Q, iv) for iv in input_vectors]
+        return np.stack(Vs, axis=0)
 
     @staticmethod
     @jit
@@ -272,7 +285,8 @@ class Circuit(object):
         V : np.array
             Solution vector V. V has size n.
         '''
-        H = Circuit._s_extended_hessian(Circuit._s_hessian(conductances,incidence_matrix),Q)
+        H = extended_hessian(True, hessian(True, conductances, incidence_matrix), Q)
+        # H = Circuit._s_extended_hessian(Circuit._s_hessian(conductances,incidence_matrix),Q)
         # f_extended = jnp.hstack([jnp.zeros(jnp.shape(incidence_matrix)[0]), f])
         # solve the system
         V = jax.scipy.linalg.solve(H, input_vector)[:jnp.shape(incidence_matrix)[0]]

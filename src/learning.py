@@ -11,10 +11,14 @@ from jax import jit, vmap
 import json
 import csv
 from scipy.sparse import hstack
+from typing import List, Tuple, Union, Optional
 
-class learning(Circuit):
+
+
+
+class LearningCircuit(Circuit):
     '''
-    Class for linear learning circuits.
+    Class for linear LearningCircuit circuits.
 
     Attributes
     ----------
@@ -27,8 +31,27 @@ class learning(Circuit):
     pts : np.array
         Positions of the nodes.
     '''
-    def __init__(self,graph, conductances, name = 'circuit', min_k = 1.e-6, max_k = 1.e6, jax = False, loss_history = None, checkpoint_iterations = None, power_history = None, energy_history = None, best_conductances = None, best_error = None, regularization = 0, center = 0):
-        ''' Initialize the coupled learning circuit.
+    VERSION        = "1.0"
+    DEFAULT_PARAMS = {
+        "min_k": 1e-6,
+        "max_k": 1e6,
+        "jax": False,
+        "l2_regularization": 0,
+        "l2_center": 0,
+        "loss_history": None,
+        "checkpoint_iterations": None,
+        "power_history": None,
+        "energy_history": None,
+        "best_conductances": None,
+        "best_error": None,
+        "name": "network",
+        "indices_outputs": None,
+        "indices_inputs": None,
+        "current_bool": None
+        # and any others
+    }
+    def __init__(self,graph, conductances, **params):
+        ''' Initialize the coupled LearningCircuit circuit.
 
         Parameters
         ----------
@@ -37,46 +60,67 @@ class learning(Circuit):
         conductances : np.array
             Conductances of the edges of the circuit.
         '''
-        super().__init__(graph, jax=jax)
-        self.jax = jax
+        super().__init__(graph, jax=params.get("jax", self.DEFAULT_PARAMS["jax"]))
         self.set_conductances(conductances)
-        self.name = name
-        
-        self.min_k = min_k
-        self.max_k = max_k
-        if loss_history is None:
+        # self.name = name
+
+        # merge defaults + passed-in options
+        merged = {**self.DEFAULT_PARAMS, **params}
+
+        # always coerce into the right array type
+        def _asarray(x, dtype=None):
+            if x is None:
+                return None
+            if self.jax:
+                return jnp.asarray(x, dtype=dtype)
+            else:
+                return np.asarray(x, dtype=dtype)
+            
+         
+        self.min_k  = merged["min_k"]
+        self.max_k  = merged["max_k"]
+        self.l2_regularization = merged["l2_regularization"]
+        self.l2_center = merged["l2_center"]
+        self.name = merged["name"]
+        self.jax = merged["jax"]
+        self.indices_inputs  = _asarray(merged["indices_inputs"],  dtype=int)
+        self.indices_outputs = _asarray(merged["indices_outputs"], dtype=int)
+        self.current_bool    = _asarray(merged["current_bool"],    dtype=bool)
+
+        # self.indices_inputs = merged["indices_inputs"]
+        # self.indices_outputs = merged["indices_outputs"]
+        # self.current_bool = merged["current_bool"]
+
+        if merged["loss_history"] is None:
             self.loss_history = []
         else:
-            self.loss_history = loss_history
-        if checkpoint_iterations is None or checkpoint_iterations == []:
+            self.loss_history = merged["loss_history"]
+        if merged["checkpoint_iterations"] is None or merged["checkpoint_iterations"] == []:
             self.checkpoint_iterations = []
             self.learning_step = 0
         else:
-            self.learning_step = checkpoint_iterations[-1]
-            self.checkpoint_iterations = checkpoint_iterations
-        if power_history is None or power_history == []:
+            self.learning_step = merged["checkpoint_iterations"][-1]
+            self.checkpoint_iterations = merged["checkpoint_iterations"]
+        if merged["power_history"] is None or merged["power_history"] == []:
             self.power_history = []
             self.current_power = 0
         else:
-            self.power_history = power_history
-            self.current_power = power_history[-1]
-        if energy_history is None or energy_history == []:
+            self.power_history = merged["power_history"]
+            self.current_power = merged["power_history"][-1]
+        if merged["energy_history"] is None or merged["energy_history"] == []:
             self.energy_history = []
             self.current_energy = 0
         else:
-            self.energy_history = energy_history
-            self.current_energy = energy_history[-1]
-        if best_conductances is None:
+            self.energy_history = merged["energy_history"]
+            self.current_energy = merged["energy_history"][-1]
+        if merged["best_conductances"] is None:
             self.best_conductances = self.conductances
         else:
-            self.best_conductances = best_conductances
-        if best_error is None:
+            self.best_conductances = merged["best_conductances"]
+        if merged["best_error"] is None:
             self.best_error = np.inf
         else:
-            self.best_error = best_error
-        
-        self.l2 = regularization
-        self.center = center
+            self.best_error = merged["best_error"]
 
     def _clip_conductances(self):
         ''' Clip the conductances to be between min_k and max_k.
@@ -157,7 +201,7 @@ class learning(Circuit):
     @jit
     def s_mse(conductances, incidence_matrix, Q_inputs, Q_outputs, inputs, true_outputs):
         ''' Compute the mean square error for batches of inputs and outputs. '''
-        batch_mse = vmap(learning.s_mse_single, in_axes=(None, None, None, None, 0, 0))
+        batch_mse = vmap(LearningCircuit.s_mse_single, in_axes=(None, None, None, None, 0, 0))
         mse_values = batch_mse(conductances, incidence_matrix, Q_inputs, Q_outputs, inputs, true_outputs)
         return jnp.mean(mse_values) 
 
@@ -165,14 +209,14 @@ class learning(Circuit):
     @jit
     def s_grad_mse(conductances, incidence_matrix, Q_inputs, Q_outputs, inputs, true_output):
         ''' Compute the gradient of the mean square error. '''
-        grad_func = jax.grad(learning.s_mse, argnums=0)
+        grad_func = jax.grad(LearningCircuit.s_mse, argnums=0)
         return grad_func(conductances, incidence_matrix, Q_inputs, Q_outputs, inputs, true_output)
 
     @staticmethod
     @jit
     def s_hessian_mse(conductances, incidence_matrix, Q_inputs, Q_outputs, inputs, true_output):
         ''' Compute the hessian of the mean square error. '''
-        hessian_func = jax.hessian(learning.s_mse, argnums=0)
+        hessian_func = jax.hessian(LearningCircuit.s_mse, argnums=0)
         return hessian_func(conductances, incidence_matrix, Q_inputs, Q_outputs, inputs, true_output)
         
     
@@ -185,6 +229,97 @@ class learning(Circuit):
 	*****************************************************************************************************
 	*****************************************************************************************************
     '''
+
+    def train(
+        self,
+        train_data: List[Tuple[np.ndarray, np.ndarray]],
+        n_epochs: int,
+        update_fn,
+        lr: float,
+        modulating_f,
+        *update_params, 
+        verbose: bool = True,
+        save_state: bool = False,
+        save_global: bool = False,
+        save_path: str = 'trained_circuit',
+        save_every: int = 1) -> dict:
+
+        it = tqdm(range(1, n_epochs + 1)) if verbose else range(1, n_epochs + 1)
+        n_batches = len(train_data)
+
+        # Initial state stats of one peoch
+        if self.learning_step == 0:
+            indices = np.random.permutation(n_batches)
+            loss_acc, power_acc = 0.0, 0.0
+            for i in indices:
+                batch = train_data[i]
+                delta_k, loss, power = update_fn(self, batch, modulating_f, lr, *update_params)
+                # stats
+                loss_acc += loss
+                power_acc += power
+                self.current_energy += power
+                if loss < self.best_error:
+                    self.best_error = loss
+                    self.best_conductances = self.conductances.copy()
+                if save_state:
+                    self.save_local(save_path+'_conductances.csv')
+
+            loss_epoch = loss_acc / n_batches
+            power_epoch = power_acc / n_batches
+            self.loss_history.append(loss_epoch)
+            self.power_history.append(power_epoch)
+            self.energy_history.append(self.current_energy)
+            self.checkpoint_iterations.append(self.learning_step)
+            if save_state:
+                self.save_local(save_path+'_conductances.csv')
+
+        # training
+        for epoch in it:
+            indices = np.random.permutation(n_batches)
+            loss_acc, power_acc = 0.0, 0.0
+
+            for i in indices:
+                batch = train_data[i]
+                delta_k, loss, power = update_fn(self, batch, modulating_f, lr, *update_params)
+                # apply & clip
+                self.conductances -= delta_k
+                clip = jnp.clip if self.jax else np.clip
+                self.conductances = clip(
+                    self.conductances, self.min_k, self.max_k
+                )
+
+                # stats
+                loss_acc += loss
+                power_acc += power
+                self.current_energy += power
+                if loss < self.best_error:
+                    self.best_error = loss
+                    self.best_conductances = self.conductances.copy()
+                self.learning_step += 1
+
+            # end epoch
+            loss_epoch = loss_acc / n_batches
+            power_epoch = power_acc / n_batches
+            self.loss_history.append(loss_epoch)
+            self.power_history.append(power_epoch)
+            self.energy_history.append(self.current_energy)
+            self.checkpoint_iterations.append(self.learning_step)
+            if verbose:
+                it.set_description(f"Epoch {epoch}/{n_epochs} Loss={loss_epoch:.3e}")
+            if save_state:
+                self.save_local(save_path+'_conductances.csv')
+
+        # end of training
+        if save_global:
+            self.save_global(save_path+'_global.json')
+            self.save_graph(save_path+'_graph.json')
+        return {
+            'iterations': self.checkpoint_iterations,
+            'loss': self.loss_history,
+            'power': self.power_history,
+            'energy': self.energy_history,
+        }
+
 
     def _dk_CL(self, eta, batch, Q_clamped, Q_outputs):
         ''' Compute the change in conductances, dk, according to the input,output data in the batch using Coupled Learning.
@@ -287,8 +422,8 @@ class learning(Circuit):
                     self.best_error = loss
                     self.best_conductances = self.conductances
                 # update
-                if self.l2:
-                    self.conductances = self.conductances - learning_rate*(delta_conductances+self.l2*(self.conductances-self.center))
+                if self.l2_regularization:
+                    self.conductances = self.conductances - learning_rate*(delta_conductances+self.l2_regularization*(self.conductances-self.l2_center))
                 else:
                     self.conductances = self.conductances - learning_rate*delta_conductances
                 self._clip_conductances()
@@ -328,7 +463,7 @@ class learning(Circuit):
         delta_conductances: np.array
             Change in conductances.
         '''
-        delta_conductances = learning.s_grad_mse(conductances, incidence_matrix, Q_inputs, Q_outputs, circuit_batch[0], circuit_batch[1])
+        delta_conductances = LearningCircuit.s_grad_mse(conductances, incidence_matrix, Q_inputs, Q_outputs, circuit_batch[0], circuit_batch[1])
         return delta_conductances
 
     def train_GD(self, learning_rate, train_data, n_epochs, save_global = False, save_state = False, save_path = 'trained_circuit', save_every = 1, verbose=True):
@@ -394,7 +529,11 @@ class learning(Circuit):
                     self.best_conductances = self.conductances
                 # update
                 delta_conductances = self._s_dk_GD(circuit_batch, self.conductances, self.incidence_matrix, self.Q_inputs, self.Q_outputs, self.indices_inputs, self.current_bool, self.n)
-                self.conductances = self.conductances - learning_rate*delta_conductances
+                # update
+                if self.l2_regularization:
+                    self.conductances = self.conductances - learning_rate*(delta_conductances+self.l2_regularization*(self.conductances-self.l2_center))
+                else:
+                    self.conductances = self.conductances - learning_rate*delta_conductances
                 self._jax_clip_conductances()
                 self.learning_step = self.learning_step + 1
                 
@@ -445,7 +584,7 @@ class learning(Circuit):
         # reset the incidence matrix
         self.incidence_matrix = nx.incidence_matrix(self.graph, oriented=True)
         if jax:
-            self.incidence_matrix = jnp.array(self.incidence_matrix.todense())
+            self.incidence_matrix = jnp.array(self.incidence_matrix.toarray())
 
         # reset the task
         if jax:
@@ -489,14 +628,13 @@ class learning(Circuit):
         try:
             # Dictionary comprehension to clean and convert data
             dic = {
-                "name": self.name,
+                "version": self.VERSION,
+                # dump all the DEFAULT_PARAMS (in case they changed from default)
+                **{k: getattr(self, k) for k in self.DEFAULT_PARAMS},
                 "n": self.n,
                 "ne": self.ne,
                 "learning_rate": self.learning_rate,
                 "learning_step": self.learning_step,
-                "jax": self.jax,
-                "min_k": self.min_k,
-                "max_k": self.max_k,
                 "indices_inputs": to_json_compatible(self.indices_inputs),
                 "indices_outputs": to_json_compatible(self.indices_outputs),
                 "current_bool": to_json_compatible(self.current_bool),
@@ -527,7 +665,25 @@ class learning(Circuit):
             save_to_csv(path, self.conductances.tolist())
 
         
+    @classmethod
+    def from_json(cls, path, graph, conductances):
+        data = json.load(open(path))
+        params = {k: data.get(k, default)
+                  for k, default in cls.DEFAULT_PARAMS.items()}
+        obj = cls(graph,
+                  conductances,
+                  **params)
+        # restore histories if present…
+        obj.loss_history          = data.get("loss_history", [])
+        obj.power_history         = data.get("power_history", [])
+        obj.energy_history        = data.get("energy_history", [])
+        obj.checkpoint_iterations = data.get("checkpoint_iterations", [])
+        obj.best_conductances     = np.array(data.get("best_conductances", conductances))
+        obj.best_error            = data.get("best_error", np.inf)
 
+        _ = obj.set_inputs(obj.indices_inputs, obj.current_bool)
+        _ = obj.set_outputs(obj.indices_outputs)
+        return obj
 
 
     '''
@@ -567,7 +723,7 @@ class learning(Circuit):
         # remove ticks
         axs.set_xticks([])
         axs.set_yticks([])
-        # set the title of each subplot to be the corresponding eigenvalue in scientific notation
+        # split_data_into_batches the title of each subplot to be the corresponding eigenvalue in scientific notation
         axs.set_title(title)
         if filename:
             fig.savefig(filename, dpi = 300)
@@ -592,19 +748,19 @@ class learning(Circuit):
             converted = True
         
         if not isinstance(self.Q_inputs, jnp.ndarray):
-            self.Q_inputs = jnp.array(self.Q_inputs.todense())
+            self.Q_inputs = jnp.array(self.Q_inputs.toarray())
             converted = True
         
         if not isinstance(self.Q_outputs, jnp.ndarray):
-            self.Q_outputs = jnp.array(self.Q_outputs.todense())
+            self.Q_outputs = jnp.array(self.Q_outputs.toarray())
             converted = True
 
         # if not isinstance(self.Q_clamped, jnp.ndarray):
-        #     self.Q_clamped = jnp.array(self.Q_clamped.todense())
+        #     self.Q_clamped = jnp.array(self.Q_clamped.toarray())
         #     converted = True
 
         if not isinstance(self.incidence_matrix, jnp.ndarray):
-            self.incidence_matrix = jnp.array(self.incidence_matrix.todense())
+            self.incidence_matrix = jnp.array(self.incidence_matrix.toarray())
             converted = True
 
         if not isinstance(self.conductances, jnp.ndarray):
@@ -657,96 +813,96 @@ class learning(Circuit):
 *****************************************************************************************************
 '''
 
-def split_data_into_batches( input_data, output_data, batch_size):
-        '''
-        Convert the data into batches.
+# def split_data_into_batches( input_data, output_data, batch_size):
+#         '''
+#         Convert the data into batches.
 
-        Parameters
-        ----------
-        input_data : np.array
-            Input data with dimensions (n_data, len(indices_inputs))
-        output_data : np.array
-            Output data with dimensions (n_data, len(indices_outputs))
-        batch_size : int
-            The size of each batch.
+#         Parameters
+#         ----------
+#         input_data : np.array
+#             Input data with dimensions (n_data, len(indices_inputs))
+#         output_data : np.array
+#             Output data with dimensions (n_data, len(indices_outputs))
+#         batch_size : int
+#             The size of each batch.
 
-        Returns
-        -------
-        batches : list of tuples
-            List of batches, each containing a tuple of (input_batch, output_batch).
-        '''
-        n_data = len(input_data)
-        if n_data != len(output_data):
-            raise ValueError("Input and output data must have the same length.")
-        if n_data < batch_size:
-            raise ValueError("Batch size must be smaller than the length of the data.")
+#         Returns
+#         -------
+#         batches : list of tuples
+#             List of batches, each containing a tuple of (input_batch, output_batch).
+#         '''
+#         n_data = len(input_data)
+#         if n_data != len(output_data):
+#             raise ValueError("Input and output data must have the same length.")
+#         if n_data < batch_size:
+#             raise ValueError("Batch size must be smaller than the length of the data.")
 
-        n_batches = n_data // batch_size
-        batches = [
-            (input_data[i * batch_size: (i + 1) * batch_size],
-             output_data[i * batch_size: (i + 1) * batch_size])
-            for i in range(n_batches)
-        ]
+#         n_batches = n_data // batch_size
+#         batches = [
+#             (input_data[i * batch_size: (i + 1) * batch_size],
+#              output_data[i * batch_size: (i + 1) * batch_size])
+#             for i in range(n_batches)
+#         ]
 
-        # Check if there are leftover data points after full batches
-        if n_data % batch_size != 0:
-            batches.append(
-                (input_data[n_batches * batch_size:], output_data[n_batches * batch_size:])
-            )
+#         # Check if there are leftover data points after full batches
+#         if n_data % batch_size != 0:
+#             batches.append(
+#                 (input_data[n_batches * batch_size:], output_data[n_batches * batch_size:])
+#             )
 
-        return batches
+#         return batches
 
-def save_to_csv(filename, data, mode='a'):
-    """
-    Save data to a CSV file.
+# def save_to_csv(filename, data, mode='a'):
+#     """
+#     Save data to a CSV file.
     
-    Parameters:
-    - filename: Name of the file to save to.
-    - data: The data to save (should be a list or array).
-    - mode: File mode ('w' for write, 'a' for append). Default is 'a'.
-    """
-    with open(filename, mode, newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(data)
+#     Parameters:
+#     - filename: Name of the file to save to.
+#     - data: The data to save (should be a list or array).
+#     - mode: File mode ('w' for write, 'a' for append). Default is 'a'.
+#     """
+#     with open(filename, mode, newline='') as file:
+#         writer = csv.writer(file)
+#         writer.writerow(data)
 
-def load_from_csv(filename):
-    """
-    Load data from a CSV file.
+# def load_from_csv(filename):
+#     """
+#     Load data from a CSV file.
     
-    Parameters:
-    - filename: Name of the file to load from.
+#     Parameters:
+#     - filename: Name of the file to load from.
     
-    Returns:
-    - A list of lists containing the data.
-    """
-    data = []
-    with open(filename, 'r') as file:
-        reader = csv.reader(file)
-        for row in reader:
-            data.append([float(item) for item in row])
-    return data
+#     Returns:
+#     - A list of lists containing the data.
+#     """
+#     data = []
+#     with open(filename, 'r') as file:
+#         reader = csv.reader(file)
+#         for row in reader:
+#             data.append([float(item) for item in row])
+#     return data
 
 
-def to_json_compatible(item):
-    ''' Convert JAX arrays to JSON compatible formats, assuming item is a JAX array. '''
-    if isinstance(item, (jnp.ndarray, np.ndarray, list)):
-        return np.array(item).tolist()  # np.array() ensures compatibility and handles JAX arrays too
-    return item
+# def to_json_compatible(item):
+#     ''' Convert JAX arrays to JSON compatible formats, assuming item is a JAX array. '''
+#     if isinstance(item, (jnp.ndarray, np.ndarray, list)):
+#         return np.array(item).tolist()  # np.array() ensures compatibility and handles JAX arrays too
+#     return item
 
 
-import json
-import numpy as np
-import jax.numpy as jnp
+# import json
+# import numpy as np
+# import jax.numpy as jnp
 
-def load_json(file_path):
-    with open(file_path, 'r') as file:
-        return json.load(file)
+# def load_json(file_path):
+#     with open(file_path, 'r') as file:
+#         return json.load(file)
 
-def get_array(data, key, default, use_jax):
-    array_data = data.get(key, default)
-    if array_data is not None:
-        return jnp.array(array_data) if use_jax else np.array(array_data)
-    return None
+# def get_array(data, key, default, use_jax):
+#     array_data = data.get(key, default)
+#     if array_data is not None:
+#         return jnp.array(array_data) if use_jax else np.array(array_data)
+#     return None
 
 def create_cl_from_json(jsonfile_global, jsonfile_graph, csv_local=None, new_train=False):
     # Load data from JSON files
@@ -775,8 +931,8 @@ def create_cl_from_json(jsonfile_global, jsonfile_graph, csv_local=None, new_tra
     indices_inputs = get_array(data_global, 'indices_inputs', None, use_jax)
     indices_outputs = get_array(data_global, 'indices_outputs', None, use_jax)
 
-    # Create the learning object
-    circuit = learning(
+    # Create the LearningCircuit object
+    circuit = LearningCircuit(
         graph,
         conductances,
         name = data_global['name'],
@@ -801,4 +957,5 @@ def create_cl_from_json(jsonfile_global, jsonfile_graph, csv_local=None, new_tra
     _ = circuit.set_outputs(indices_outputs)
 
     return circuit
+
 
