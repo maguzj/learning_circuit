@@ -199,7 +199,8 @@ class LearningCircuit(Circuit):
         verbose: bool = True,
         save_state: bool = False,
         save_global: bool = False,
-        save_path: str = 'trained_circuit') -> dict:
+        save_path: str = 'trained_circuit',
+        save_every: 1) -> dict:
 
         it = tqdm(range(1, n_epochs + 1)) if verbose else range(1, n_epochs + 1)
         n_batches = len(train_data)
@@ -259,14 +260,23 @@ class LearningCircuit(Circuit):
             loss_epoch = loss_acc / n_batches
             power_epoch = power_acc / n_batches
             self.current_power = power_epoch
-            self.loss_history.append(loss_epoch)
-            self.power_history.append(self.current_power)
-            self.energy_history.append(self.current_energy)
-            self.checkpoint_iterations.append(self.learning_step)
+
+            # save
+            if epoch % save_every == 0:
+                self.loss_history.append(loss_epoch)
+                self.power_history.append(self.current_power)
+                self.energy_history.append(self.current_energy)
+                self.checkpoint_iterations.append(self.learning_step)
+                if save_state:
+                    self.save_local(save_path+'_conductances.csv')
+            # self.loss_history.append(loss_epoch)
+            # self.power_history.append(self.current_power)
+            # self.energy_history.append(self.current_energy)
+            # self.checkpoint_iterations.append(self.learning_step)
             if verbose:
                 it.set_description(f"Epoch {epoch}/{n_epochs} Loss={loss_epoch:.3e}")
-            if save_state:
-                self.save_local(save_path+'_conductances.csv')
+            # if save_state:
+            #     self.save_local(save_path+'_conductances.csv')
 
         # end of training
         if save_global:
