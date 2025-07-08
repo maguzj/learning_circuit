@@ -223,8 +223,9 @@ class LearningCircuit(Circuit):
 
             loss_epoch = loss_acc / n_batches
             power_epoch = power_acc / n_batches
+            self.current_power = power_epoch
             self.loss_history.append(loss_epoch)
-            self.power_history.append(power_epoch)
+            self.power_history.append(self.current_power)
             self.energy_history.append(self.current_energy)
             self.checkpoint_iterations.append(self.learning_step)
             if save_state:
@@ -257,8 +258,9 @@ class LearningCircuit(Circuit):
             # end epoch
             loss_epoch = loss_acc / n_batches
             power_epoch = power_acc / n_batches
+            self.current_power = power_epoch
             self.loss_history.append(loss_epoch)
-            self.power_history.append(power_epoch)
+            self.power_history.append(self.current_power)
             self.energy_history.append(self.current_energy)
             self.checkpoint_iterations.append(self.learning_step)
             if verbose:

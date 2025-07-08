@@ -82,8 +82,7 @@ def gd_update(
         inputs)
     preds = states.dot(circuit.Q_outputs)
     loss = float(np.mean(0.5 * (preds - targets)**2))
-    power = float(((states.dot(circuit.incidence_matrix))**2 * circuit.conductances).mean())
-    circuit.current_power = power
+    power = 0 #float(((states.dot(circuit.incidence_matrix))**2 * circuit.conductances).mean())
     return delta_k, loss, power
 
 
@@ -119,10 +118,8 @@ def cl_update(
     delta_k = (1/eta) * ((vd_clamped**2 - vd_free**2).mean(axis=0))
     # logging
     loss = float(np.mean(0.5 * (y_free - targets)**2))
-    power = float(np.mean(circuit.conductances * (vd_free**2)))
-    circuit.current_power = power
-    circuit.current_energy += circuit.current_power
-    return lr * delta_k, loss, circuit.current_power
+    power = 0 #float(np.mean(circuit.conductances * (vd_free**2)))
+    return lr * delta_k, loss, power
 
 
 
@@ -151,8 +148,7 @@ def gd_update_ferro_antiferro(
         inputs)
     preds = states.dot(circuit.Q_outputs)
     loss = float(np.mean(0.5 * (preds - targets)**2))
-    power = float(((states.dot(circuit.incidence_matrix))**2 * circuit.conductances).mean())
-    circuit.current_power = power
+    power = 0 #float(((states.dot(circuit.incidence_matrix))**2 * (jnp.abs(circuit.conductances)+circuit.conductances))        +((states.dot(jnp.abs(circuit.incidence_matrix)))**2 * (jnp.abs(circuit.conductances)-circuit.conductances)).mean())
     return delta_k, loss, power
 
 
@@ -189,7 +185,5 @@ def cl_update_ferro_antiferro(
     delta_k = (1/eta) * ((vd_clamped**2 - vd_free**2).mean(axis=0))
     # logging
     loss = float(np.mean(0.5 * (y_free - targets)**2))
-    power = float(np.mean(circuit.conductances * (vd_free**2)))
-    circuit.current_power = power
-    circuit.current_energy += circuit.current_power
-    return lr * delta_k, loss, circuit.current_power
+    power = 0 # float(np.mean(circuit.conductances * (vd_free**2)))
+    return lr * delta_k, loss, power
