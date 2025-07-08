@@ -1,7 +1,6 @@
 # utils.py
 import csv
 import json
-from typing import List, Tuple, Union, Optional
 import numpy as np
 import jax.numpy as jnp
 import jax
@@ -132,6 +131,16 @@ def extended_hessian(jax, hessian, Q):
     else:
         ext_hess = bmat([[hessian, Q], [Q.T, None]], format='csr', dtype=float)
         return ext_hess
+    
+def hessian_ferro_antiferro(jax, conductances, incidence_matrix):
+    if jax:
+        abs_im = jnp.abs(incidence_matrix)
+        abs_k = jnp.abs(conductances)
+        return jnp.dot(abs_im*(abs_k-conductances),jnp.transpose(abs_im))+jnp.dot(incidence_matrix*(abs_k+conductances),jnp.transpose(incidence_matrix))
+    else:
+        abs_im = np.abs(incidence_matrix)
+        abs_k = np.abs(conductances)
+        return (abs_im*(abs_k-conductances)).dot(abs_im.T)+(incidence_matrix*(abs_k+conductances)).dot(incidence_matrix.T)
 
 
 
@@ -197,8 +206,3 @@ def get_array(data, key, default, use_jax):
     if array_data is not None:
         return jnp.array(array_data) if use_jax else np.array(array_data)
     return None
-
-
-
-
-#### 

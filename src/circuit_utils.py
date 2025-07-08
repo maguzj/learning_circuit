@@ -1,7 +1,6 @@
 import numpy as np
 import networkx as nx
 from scipy.sparse import csr_matrix
-from scipy.sparse import bmat
 from scipy.sparse.linalg import spsolve
 import matplotlib.pyplot as plt
 import matplotlib.colors as mplcolors
@@ -72,21 +71,6 @@ class Circuit(object):
             conductances = np.array(conductances)
         self.conductances = conductances
 
-    def _hessian(self):
-        ''' Compute the Hessian of the network with respect to the conductances. '''
-        return 2*(self.incidence_matrix*self.conductances).dot(self.incidence_matrix.T)
-    
-    @staticmethod
-    def _s_hessian(conductances,incidence_matrix):
-        ''' Compute the Hessian of the network with respect to the conductances. '''
-        return 2*jnp.dot(incidence_matrix*conductances,jnp.transpose(incidence_matrix))
-    
-    @staticmethod
-    def _s_hessian_with_negative_couplings(conductances,deltap,deltam):
-        ''' Compute the Hessian of the network with respect to the generalized conductances. The incidence matrix is the difference of deltap and deltam '''
-        return 2*(jnp.dot(deltap*jnp.abs(conductances),jnp.transpose(deltap))+jnp.dot(deltam*jnp.abs(conductances),jnp.transpose(deltam))-jnp.dot(deltap*conductances,jnp.transpose(deltam))-jnp.dot(deltam*conductances,jnp.transpose(deltap)))
-
-
     def constraint_matrix(self, indices_nodes):
         ''' Compute the constraint matrix Q given by indices_nodes.
         Q corresponds to the projector onto the space of indices_nodes. 
@@ -125,43 +109,6 @@ class Circuit(object):
                 raise ValueError('indicesNodes must be a 1D array or a 2D array with shape (integer, 2).')
                 
         return Q
-    
-    def _extended_hessian(self, Q):
-        ''' Extend the hessian of the network with the constraint matrix Q. 
-
-        Parameters
-        ----------
-        Q : scipy.sparse.csr_matrix
-            Constraint matrix Q
-
-        Returns
-        -------
-        H : scipy.sparse.csr_matrix
-            Extended Hessian. H is a sparse matrix of size (n + len(indices_nodes)) x (n + len(indices_nodes)).
-        
-        '''
-        ext_hess = bmat([[self._hessian(), Q], [Q.T, None]], format='csr', dtype=float)
-        return ext_hess
-
-    @staticmethod
-    def _s_extended_hessian(hessian,Q):
-        ''' Extend the hessian of the network with the constraint matrix Q. 
-
-        Parameters
-        ----------
-        hessian : jnp.array
-            Hessian of the network
-        Q : jnp.array
-            Constraint matrix Q
-
-        Returns
-        -------
-        H : jnp.array
-            Extended Hessian. H is a dense matrix of size (n + len(indices_nodes)) x (n + len(indices_nodes)).
-        
-        '''
-        ext_hess = jnp.block([[hessian, Q],[jnp.transpose(Q), jnp.zeros(shape=(jnp.shape(Q)[1],jnp.shape(Q)[1]))]])
-        return ext_hess
 
     
     '''
@@ -173,71 +120,7 @@ class Circuit(object):
 	*****************************************************************************************************
 	*****************************************************************************************************
 	'''
-
-
-    # Moved to utils.py
-    ####################
-    def circuit_input(self, input_nodes, indices_nodes, current_bool):
-        ''' Compute the input vector f for the circuit. 
-        
-        Parameters
-        ----------
-        input_nodes : np.array
-            Array with the current or voltages at the nodes specified by indices_nodes.
-        indices_nodes : np.array
-            Array with the indices of the nodes to be constrained. The nodes themselves are given by np.array(self.graph.nodes)[indices_nodes].
-        current_bool : np.array
-            Boolean array specifying if the input_nodes are currents or voltages. If an entry is True, the corresponding input_node is a current. If False, it is a voltage.
-
-        Returns
-        -------
-        f : np.array
-            Source vector f. f has size n + len(indices_nodes).
-        '''
-        n_voltage_input = len(current_bool) -(current_bool).sum()
-        f = np.zeros(self.n + n_voltage_input)
-        f[indices_nodes[current_bool]] = input_nodes[current_bool]
-        f[self.n:] = input_nodes[~current_bool]
-        
-        return f
-
-    @staticmethod
-    def s_circuit_input(input_nodes, indices_nodes, current_bool, n):
-        ''' Compute the input vector f for the circuit. 
-        
-        Parameters
-        ----------
-        input_nodes : np.array
-            Array with the current or voltages at the nodes specified by indices_nodes.
-        indices_nodes : np.array
-            Array with the indices of the nodes to be constrained. The nodes themselves are given by np.array(self.graph.nodes)[indices_nodes].
-        current_bool : np.array
-            Boolean array specifying if the input_nodes are currents or voltages. If an entry is True, the corresponding input_node is a current. If False, it is a voltage.
-        n : int
-            Number of nodes in the graph.
-
-        Returns
-        -------
-        f : np.array
-            Source vector f. f has size n + len(indices_nodes).
-        '''
-        n_voltage_input = len(current_bool) -(current_bool).sum()
-        f = jnp.zeros(n + n_voltage_input)
-        f = f.at[indices_nodes[current_bool]].set(input_nodes[current_bool])
-        f = f.at[n:].set(input_nodes[~current_bool])
-        
-        return f
-
-    @staticmethod
-    def s_circuit_input_batch(input_nodes, indices_nodes, current_bool, n):
-        batch_circuit_input = vmap(Circuit.s_circuit_input, in_axes=(0, None, None, None))
-        return batch_circuit_input(input_nodes, indices_nodes, current_bool, n)
-        
-    ####################
     
-
-
-
     def solve(self, Q, input_vector):
         ''' Solve the circuit with the constraint matrix Q and the input_vector.
 
@@ -257,9 +140,6 @@ class Circuit(object):
         assert len(input_vector) == self.n + Q.shape[1], "Source vector f has the wrong size."
         
         H = extended_hessian(self.jax, hessian(self.jax, self.conductances, self.incidence_matrix), Q)
-        # H = self._extended_hessian(Q)
-        # f_extended = np.hstack([np.zeros(self.n), f])
-        # solve the system
         V = spsolve(H, input_vector)[:self.n]
         return V
     
@@ -286,9 +166,6 @@ class Circuit(object):
             Solution vector V. V has size n.
         '''
         H = extended_hessian(True, hessian(True, conductances, incidence_matrix), Q)
-        # H = Circuit._s_extended_hessian(Circuit._s_hessian(conductances,incidence_matrix),Q)
-        # f_extended = jnp.hstack([jnp.zeros(jnp.shape(incidence_matrix)[0]), f])
-        # solve the system
         V = jax.scipy.linalg.solve(H, input_vector)[:jnp.shape(incidence_matrix)[0]]
         return V
 
@@ -313,133 +190,29 @@ class Circuit(object):
         return batch_solve(conductances, incidence_matrix, Q, input_vectors)
     
 
-
-    @staticmethod
-    @jit
-    def s_solve_neg(conductances, deltap, deltam, Q, input_vector):
-        ''' Solve the circuit with the constraint matrix Q and the source vector input_vector.
-
-        Parameters
-        ----------
-        Q : jnp.array
-            Constraint matrix Q
-        input_vector : np.array
-            Source vector input_vector. input_vector has size self.n + len(indices_nodes).
-
-        Returns
-        -------
-        V : np.array
-            Solution vector V. V has size n.
-        '''
-        H = Circuit._s_extended_hessian(Circuit._s_hessian_with_negative_couplings(conductances,deltap, deltam),Q)
-        # f_extended = jnp.hstack([jnp.zeros(jnp.shape(incidence_matrix)[0]), f])
-        # solve the system
-        V = jax.scipy.linalg.solve(H, input_vector)[:jnp.shape(deltap)[0]]
+    def solve_ferro_antiferro(self, Q, input_vector):
+        assert len(input_vector) == self.n + Q.shape[1], "Source vector f has the wrong size."
+        H = extended_hessian(self.jax, hessian_ferro_antiferro(self.jax, self.conductances, self.incidence_matrix), Q)
+        V = spsolve(H, input_vector)[:self.n]
         return V
-
+    
+    def solve_batch_ferro_antiferro(self, Q, input_vectors):
+        # Loop over batch dimension and stack
+        Vs = [self.solve_ferro_antiferro(Q, iv) for iv in input_vectors]
+        return np.stack(Vs, axis=0)
 
     @staticmethod
     @jit
-    def s_solve_batch_neg(conductances, deltap, deltam, Q, input_vectors):
-        ''' Solve the circuit with the constraint matrix Q and the source vector input_vector.
-
-        Parameters
-        ----------
-        Q : jnp.array
-            Constraint matrix Q
-        input_vector : np.array
-            Source vector input_vector. input_vector has size self.n + len(indices_nodes).
-
-        Returns
-        -------
-        V : np.array
-            Solution vector V. V has size n.
-        '''
-        batch_solve = vmap(Circuit.s_solve_neg, in_axes=(None, None, None, None, 0))
-        return batch_solve(conductances, deltap, deltam, Q, input_vectors)
-    '''
-	*****************************************************************************************************
-	*****************************************************************************************************
-
-										CIRCUIT REDUCTION
-
-	*****************************************************************************************************
-	*****************************************************************************************************
-	'''
-
-    def _star_to_mesh_onenode(self, node):
-        ''' Reduces the circuit by using the star-mesh transformation on node.
-
-        Parameters
-        ----------
-        node : int
-            Index of the node to be transformed.
-
-        '''
-        # determine the neighbors of node and the sum of the conductances of the edges between node and its neighbors
-        neighbors = list(self.graph.neighbors(node))
-        sum_conductances = sum([self.graph[node][neighbor]['weight'] for neighbor in neighbors])
-
-        # add the edges between the neighbors of node with new weights (conductances) corresponding to the product of the conductances of the edges between node and its neighbors divided by the sum of the conductances of the edges between node and its neighbors
-        for i in range(len(neighbors)):
-            for j in range(i+1, len(neighbors)):
-                eff_conductance = (self.graph[neighbors[i]][node]['weight'])*(self.graph[neighbors[j]][node]['weight'])/sum_conductances
-                # add the edge if it does not exist
-                if not self.graph.has_edge(neighbors[i], neighbors[j]):
-                    self.graph.add_edge(neighbors[i], neighbors[j], weight = eff_conductance)
-                # otherwise, update the weight (parallel conductances)
-                else:
-                    self.graph[neighbors[i]][neighbors[j]]['weight'] += eff_conductance
-
-        # remove the node from the graph
-        self.graph.remove_node(node)
-
-    def star_to_mesh(self, nodes, all_but_nodes=False):
-        ''' Reduces the circuit by using the star-mesh transformation on all nodes in nodes.
-        
-        Parameters
-        ----------
-        nodes : np.array
-            Array with the indices of the nodes to be transformed.
-        all_but_nodes : bool, optional
-            If True, the star-mesh transformation is applied to all nodes except those in nodes. The default is False.
-        '''
-        # check that nodes is a non-empty array
-        if len(nodes) == 0:
-            raise ValueError('nodes must be a non-empty array.')
-        # check that the nodes exist
-        if not all([node in self.graph.nodes for node in nodes]):
-            raise ValueError('Some of the nodes do not exist.')
-        # check that the nodes are not repeated
-        if len(nodes) != len(set(nodes)):
-            raise ValueError('Some of the nodes are repeated.')
-        # check that the graph will have at least 2 nodes
-        if (len(nodes) >= self.n - 1 and not all_but_nodes) or (len(nodes) < 2 and all_but_nodes):
-            raise ValueError('The graph will have less than 2 nodes.')
-
-        if all_but_nodes:
-            nodes = [node for node in self.graph.nodes() if node not in nodes]
-
-        # apply the star-mesh transformation to all nodes in nodes
-        for node in nodes:
-            self._star_to_mesh_onenode(node)
-
-        self.n = self.graph.number_of_nodes()
-        self.ne = self.graph.number_of_edges()
-        self.pts = np.array([self.graph.nodes[node]['pos'] for node in self.graph.nodes])
-        self.weight_to_conductance()
-            
-    def _remove_edge(self, edge):
-        ''' Remove the edge from the graph. '''
-        # determine the index of the edge in the list of edges
-        index_edge = list(self.graph.edges).index(tuple(edge))
-        self.graph.remove_edge(*edge)
-        self.n = self.graph.number_of_nodes()
-        self.ne = self.graph.number_of_edges()
-        self.pts = np.array([self.graph.nodes[node]['pos'] for node in self.graph.nodes])
-        # remove the corresponding conductance
-        self.conductances = np.delete(self.conductances, index_edge)
-
+    def s_solve_ferro_antiferro(conductances, incidence_matrix, Q, input_vector):
+        H = extended_hessian(True, hessian_ferro_antiferro(True, conductances, incidence_matrix), Q)
+        V = jax.scipy.linalg.solve(H, input_vector)[:jnp.shape(incidence_matrix)[0]]
+        return V
+    
+    @staticmethod
+    @jit
+    def s_solve_batch_ferro_antiferro(conductances, incidence_matrix, Q, input_vectors):
+        batch_solve = vmap(Circuit.s_solve_ferro_antiferro, in_axes=(None, None, None, 0))
+        return batch_solve(conductances, incidence_matrix, Q, input_vectors)
 
         
     '''
@@ -548,20 +321,6 @@ class Circuit(object):
 
         return voltage_matrix, power_vector, effective_conductance
 
-
-
-    '''
-	*****************************************************************************************************
-	*****************************************************************************************************
-
-										EIGENVALUES AND EIGENVECTORS
-
-	*****************************************************************************************************
-	*****************************************************************************************************
-	'''
-
-
-
     '''
 	*****************************************************************************************************
 	*****************************************************************************************************
@@ -571,83 +330,6 @@ class Circuit(object):
 	*****************************************************************************************************
 	*****************************************************************************************************
     '''
-
-    def plot_node_state(self, node_state, title = None, lw = 0.5, cmap = 'RdYlBu_r', size_factor = 100, prop = True, figsize = (4,4), filename = None, ax = None):
-        ''' Plot the state of the nodes in the graph.
-
-        Parameters
-        ----------
-        node_state : np.array
-            State of the nodes in the graph. node_state has size n.
-        '''
-        posX = self.pts[:,0]
-        posY = self.pts[:,1]
-        norm = mplcolors.Normalize(vmin=np.min(node_state), vmax=np.max(node_state))
-        if prop:
-            size = size_factor*np.abs(node_state[:])
-        else:   
-            size = size_factor
-        if ax is not None:
-            ax.scatter(posX, posY, s = size, c = node_state[:],edgecolors = 'black',linewidth = lw,  cmap = cmap, norm = norm)
-            ax.set( aspect='equal')
-            # remove ticks
-            ax.set_xticks([])
-            ax.set_yticks([])
-            # show the colorbar
-            # ax.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, shrink=0.5)
-            # set the title of each subplot to be the corresponding eigenvalue in scientific notation
-            ax.set_title(title)
-        else:
-            fig, axs = plt.subplots(1,1, figsize = figsize, constrained_layout=True,sharey=True)
-            axs.scatter(posX, posY, s = size, c = node_state[:],edgecolors = 'black',linewidth = lw,  cmap = cmap, norm = norm)
-            axs.set( aspect='equal')
-            # remove ticks
-            axs.set_xticks([])
-            axs.set_yticks([])
-            # show the colorbar
-            fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), ax=axs, shrink=0.5)
-            # set the title of each subplot to be the corresponding eigenvalue in scientific notation
-            axs.set_title(title)
-            if filename is not None:
-                fig.savefig(filename, dpi = 300, bbox_inches='tight')
-
-        print('Warning: this function is going to be deprecated. Use node_state_to_ax instead.')
-
-    def plot_edge_state(self, edge_state, title = None,lw = 0.5, cmap = 'YlOrBr', figsize = (4,4), minmax = None, filename = None, background_color = '0.75'):
-        ''' Plot the state of the edges in the graph.
-
-        Parameters
-        ----------
-        edge_state : np.array
-            State of the edges in the graph. edge_state has size ne.
-        '''
-        _cmap = plt.cm.get_cmap(cmap)
-        pos_edges = np.array([np.array([self.graph.nodes[edge[0]]['pos'], self.graph.nodes[edge[1]]['pos']]).T for edge in self.graph.edges()])
-        if minmax:
-            norm = plt.Normalize(vmin=minmax[0], vmax=minmax[1])
-        else:
-            norm = plt.Normalize(vmin=np.min(edge_state), vmax=np.max(edge_state))
-        fig, axs = plt.subplots(1,1, figsize = figsize, constrained_layout=True,sharey=True)
-        for i in range(len(pos_edges)):
-            axs.plot(pos_edges[i,0], pos_edges[i,1], color = _cmap(norm(edge_state[i])), linewidth = lw)
-        axs.set( aspect='equal')
-        # remove ticks
-        axs.set_xticks([])
-        axs.set_yticks([])
-        # show the colorbar
-        fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), ax=axs, shrink=0.5)
-        axs.set_facecolor(background_color)
-        fig.set_facecolor(background_color)
-        # remove frame
-        for spine in axs.spines.values():
-            spine.set_visible(False)
-        # set the title of each subplot to be the corresponding eigenvalue in scientific notation
-        axs.set_title(title)
-        if filename:
-            fig.savefig(filename, dpi = 300)
-        
-        print('Warning: this function is going to be deprecated. Use edge_state_to_ax instead.')
-
     def edge_state_to_ax(self, ax, edge_state, vmin = None, vmax = None, cmap = cmocean.cm.matter, plot_mode = 'lines', lw = 1, zorder = 2, autoscale = True, annotate = False, alpha = 1, truncate = False, truncate_value = 0.1,shrink_factor = 0.3, color_scale = 'linear', mask = None, mask_value = 0):
         '''
         Plot the state of the edges in the graph.
