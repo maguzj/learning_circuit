@@ -200,7 +200,7 @@ class LearningCircuit(Circuit):
         save_state: bool = False,
         save_global: bool = False,
         save_path: str = 'trained_circuit',
-        save_every: 1) -> dict:
+        save_every = 1) -> dict:
 
         it = tqdm(range(1, n_epochs + 1)) if verbose else range(1, n_epochs + 1)
         n_batches = len(train_data)
