@@ -17,7 +17,6 @@ from matplotlib.collections import PatchCollection
 import matplotlib.patheffects as path_effects
 from jax import jit, vmap
 from voronoi_utils import get_voronoi_polygons
-import cmocean
 from utils import *
 
 class Circuit(object):
@@ -330,7 +329,7 @@ class Circuit(object):
 	*****************************************************************************************************
 	*****************************************************************************************************
     '''
-    def edge_state_to_ax(self, ax, edge_state, vmin = None, vmax = None, cmap = cmocean.cm.matter, plot_mode = 'lines', lw = 1, zorder = 2, autoscale = True, annotate = False, alpha = 1, truncate = False, truncate_value = 0.1,shrink_factor = 0.3, color_scale = 'linear', mask = None, mask_value = 0):
+    def edge_state_to_ax(self, ax, edge_state, vmin = None, vmax = None, cmap = 'coolwarm', plot_mode = 'lines', lw = 1, zorder = 2, autoscale = True, annotate = False, alpha = 1, truncate = False, truncate_value = 0.1,shrink_factor = 0.3, color_scale = 'linear', mask = None, mask_value = 0):
         '''
         Plot the state of the edges in the graph.
 
