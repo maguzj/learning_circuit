@@ -82,8 +82,8 @@ def gd_update(
         inputs)
     preds = states.dot(circuit.Q_outputs)
     loss = float(np.mean(0.5 * (preds - targets)**2))
-    power = 0 #float(((states.dot(circuit.incidence_matrix))**2 * circuit.conductances).mean())
-    return delta_k, loss, power
+    # power = 0 #float(((states.dot(circuit.incidence_matrix))**2 * circuit.conductances).mean())
+    return delta_k, loss
 
 
 def cl_update(
@@ -115,11 +115,11 @@ def cl_update(
     vd_free = np.dot(states_free,circuit.incidence_matrix.toarray())
     vd_clamped = np.dot(states_clamped,circuit.incidence_matrix.toarray())
     # delta conductances
-    delta_k = (1/eta) * ((vd_clamped**2 - vd_free**2).mean(axis=0))
+    delta_k = lr*(1/eta) * ((vd_clamped**2 - vd_free**2).mean(axis=0))*modulating_f(circuit.conductances)
     # logging
     loss = float(np.mean(0.5 * (y_free - targets)**2))
-    power = 0 #float(np.mean(circuit.conductances * (vd_free**2)))
-    return lr * delta_k, loss, power
+    # power = 0 #float(np.mean(circuit.conductances * (vd_free**2)))
+    return delta_k, loss
 
 
 
@@ -148,8 +148,8 @@ def gd_update_ferro_antiferro(
         inputs)
     preds = states.dot(circuit.Q_outputs)
     loss = float(np.mean(0.5 * (preds - targets)**2))
-    power = 0 #float(((states.dot(circuit.incidence_matrix))**2 * (jnp.abs(circuit.conductances)+circuit.conductances))        +((states.dot(jnp.abs(circuit.incidence_matrix)))**2 * (jnp.abs(circuit.conductances)-circuit.conductances)).mean())
-    return delta_k, loss, power
+    # power = 0 #float(((states.dot(circuit.incidence_matrix))**2 * (jnp.abs(circuit.conductances)+circuit.conductances))        +((states.dot(jnp.abs(circuit.incidence_matrix)))**2 * (jnp.abs(circuit.conductances)-circuit.conductances)).mean())
+    return delta_k, loss
 
 
 
@@ -182,8 +182,8 @@ def cl_update_ferro_antiferro(
     vd_free = np.dot(states_free,circuit.incidence_matrix.toarray())
     vd_clamped = np.dot(states_clamped,circuit.incidence_matrix.toarray())
     # delta conductances
-    delta_k = (1/eta) * ((vd_clamped**2 - vd_free**2).mean(axis=0))
+    delta_k = lr*(1/eta) * ((vd_clamped**2 - vd_free**2).mean(axis=0))*modulating_f(circuit.conductances)
     # logging
     loss = float(np.mean(0.5 * (y_free - targets)**2))
-    power = 0 # float(np.mean(circuit.conductances * (vd_free**2)))
-    return lr * delta_k, loss, power
+    # power = 0 # float(np.mean(circuit.conductances * (vd_free**2)))
+    return delta_k, loss
