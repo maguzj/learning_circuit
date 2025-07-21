@@ -5,6 +5,9 @@ import numpy as np
 import jax.numpy as jnp
 import jax
 from scipy.sparse import bmat
+import glob
+import os
+import pickle
 
 '''
 *****************************************************************************************************
@@ -156,6 +159,24 @@ def hessian_ferro_antiferro(jax, conductances, incidence_matrix):
 *****************************************************************************************************
 '''
 
+
+def load_model(name, delete_previous=False, model_state_path='model_states/'):
+    # Check if you have model load points
+    filename_list = glob.glob(model_state_path+'{}_t*.pkl'.format(name))
+    if len(filename_list)>0:
+        all_loadpoints = sorted([int(x.split('_t')[-1].split('.pkl')[0]) for x in filename_list])
+        last_epoch = all_loadpoints[-1]
+        print('** Model {} trained up to epoch {}, so I load it'.format(name,last_epoch), flush=True)
+        with open(model_state_path+'{}_t{}.pkl'.format(name,last_epoch), "rb") as file:
+            model = pickle.load(file)
+        if delete_previous:
+            # Remove all the previous loadpoints
+            for x in all_loadpoints[:-1]:
+                os.remove(model_state_path+'{}_t{}.pkl'.format(name,x))
+        return True, model
+    else:
+        print('** No load points for {}'.format(name), flush=True)
+        return False, []
 
 
 
