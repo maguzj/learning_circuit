@@ -212,6 +212,35 @@ class Circuit(object):
     def s_solve_batch_ferro_antiferro(conductances, incidence_matrix, Q, input_vectors):
         batch_solve = vmap(Circuit.s_solve_ferro_antiferro, in_axes=(None, None, None, 0))
         return batch_solve(conductances, incidence_matrix, Q, input_vectors)
+    
+    def batch_solve(self, inputs):
+        circuit_inputs = circuit_input_batch(self.jax, inputs, self.indices_inputs, self.current_bool, self.n)
+        if self.jax:
+            if self.model_type == "ferro":
+                states = Circuit.s_solve_batch(
+                    self.conductances,
+                    self.incidence_matrix,
+                    self.Q_inputs,
+                    circuit_inputs)
+            elif self.model_type == "antiferro":
+                states = Circuit.s_solve_batch_ferro_antiferro(
+                    self.conductances,
+                    self.incidence_matrix,
+                    self.Q_inputs,
+                    circuit_inputs)
+            else: 
+                raise ValueError("self.model_type must be either ferro or antiferro")
+        else:
+            if self.model_type == "ferro":
+                states = self.solve_batch(
+                    self.Q_inputs,
+                    circuit_inputs)
+            elif self.model_type == "antiferro":
+                states = self.solve_batch_ferro_antiferro(
+                    self.Q_inputs,
+                    circuit_inputs)
+        return states
+
 
         
     '''
