@@ -7,6 +7,8 @@ import jax.numpy as jnp
 import json
 from typing import List, Tuple
 from utils import *
+import pickle
+import time
 
 
 
@@ -26,7 +28,7 @@ class LearningCircuit(Circuit):
     pts : np.array
         Positions of the nodes.
     '''
-    VERSION        = "1.0"
+    VERSION        = "2.0"
     DEFAULT_PARAMS = {
         "min_k": 1e-6,
         "max_k": 1e6,
@@ -34,18 +36,20 @@ class LearningCircuit(Circuit):
         "l2_regularization": 0,
         "l2_center": 0,
         "loss_history": None,
-        "checkpoint_iterations": None,
+        "checkpoint_epochs": None,
         "power_history": None,
         "energy_history": None,
         "best_conductances": None,
         "best_error": None,
-        "name": "network",
         "indices_outputs": None,
         "indices_inputs": None,
-        "current_bool": None
+        "current_bool": None,
+        "max_epochs": 1e3,
+        "num_saves": 50,
+        "model_type": "antiferro"
         # and any others
     }
-    def __init__(self,graph, conductances, **params):
+    def __init__(self,graph, conductances, model_name, **params):
         ''' Initialize the coupled LearningCircuit circuit.
 
         Parameters
@@ -57,7 +61,7 @@ class LearningCircuit(Circuit):
         '''
         super().__init__(graph, jax=params.get("jax", self.DEFAULT_PARAMS["jax"]))
         self.set_conductances(conductances)
-        # self.name = name
+        self.model_name = model_name
 
         # merge defaults + passed-in options
         merged = {**self.DEFAULT_PARAMS, **params}
@@ -76,56 +80,60 @@ class LearningCircuit(Circuit):
         self.max_k  = merged["max_k"]
         self.l2_regularization = merged["l2_regularization"]
         self.l2_center = merged["l2_center"]
-        self.name = merged["name"]
+        # self.model_name = merged["model_name"]
         self.jax = merged["jax"]
         self.indices_inputs  = _asarray(merged["indices_inputs"],  dtype=int)
         self.indices_outputs = _asarray(merged["indices_outputs"], dtype=int)
         self.current_bool    = _asarray(merged["current_bool"],    dtype=bool)
+        self.max_epochs = merged["max_epochs"]
+        self.num_saves = merged["num_saves"]
+        self.model_type = merged["model_type"]
 
-        # self.indices_inputs = merged["indices_inputs"]
-        # self.indices_outputs = merged["indices_outputs"]
-        # self.current_bool = merged["current_bool"]
+        # initial values
+        self.epoch = 0
+        self.best_conductances = self.conductances
+        self.best_error = np.inf
+        self.loss_history = []
 
-        if merged["loss_history"] is None:
-            self.loss_history = []
-        else:
-            self.loss_history = merged["loss_history"]
-        if merged["checkpoint_iterations"] is None or merged["checkpoint_iterations"] == []:
-            self.checkpoint_iterations = []
-            self.learning_step = 0
-        else:
-            self.learning_step = merged["checkpoint_iterations"][-1]
-            self.checkpoint_iterations = merged["checkpoint_iterations"]
-        if merged["power_history"] is None or merged["power_history"] == []:
-            self.power_history = []
-            self.current_power = 0
-        else:
-            self.power_history = merged["power_history"]
-            self.current_power = merged["power_history"][-1]
-        if merged["energy_history"] is None or merged["energy_history"] == []:
-            self.energy_history = []
-            self.current_energy = 0
-        else:
-            self.energy_history = merged["energy_history"]
-            self.current_energy = merged["energy_history"][-1]
-        if merged["best_conductances"] is None:
-            self.best_conductances = self.conductances
-        else:
-            self.best_conductances = merged["best_conductances"]
-        if merged["best_error"] is None:
-            self.best_error = np.inf
-        else:
-            self.best_error = merged["best_error"]
+        # Epochs at which to store the model
+        self.t_to_save = sorted(
+            list(
+                set(
+                    np.round(
+                        np.linspace(0, self.max_epochs,
+                                    self.num_saves)).astype(int).tolist())))
 
-    def _clip_conductances(self):
-        ''' Clip the conductances to be between min_k and max_k.
-        '''
-        self.conductances = np.clip(self.conductances, self.min_k, self.max_k)
 
-    def _jax_clip_conductances(self):
-        ''' Clip the conductances to be between min_k and max_k.
-        '''
-        self.conductances = jnp.clip(self.conductances, self.min_k, self.max_k)
+        # if merged["loss_history"] is None:
+        #     self.loss_history = []
+        # else:
+        #     self.loss_history = merged["loss_history"]
+        # if merged["checkpoint_epochs"] is None or merged["checkpoint_epochs"] == []:
+        #     self.checkpoint_epochs = []
+        #     self.epoch = 0
+        # else:
+        #     self.epoch = merged["checkpoint_epochs"][-1]
+        #     self.checkpoint_epochs = merged["checkpoint_epochs"]
+        # if merged["power_history"] is None or merged["power_history"] == []:
+        #     self.power_history = []
+        #     self.current_power = 0
+        # else:
+        #     self.power_history = merged["power_history"]
+        #     self.current_power = merged["power_history"][-1]
+        # if merged["energy_history"] is None or merged["energy_history"] == []:
+        #     self.energy_history = []
+        #     self.current_energy = 0
+        # else:
+        #     self.energy_history = merged["energy_history"]
+        #     self.current_energy = merged["energy_history"][-1]
+        # if merged["best_conductances"] is None:
+        #     self.best_conductances = self.conductances
+        # else:
+        #     self.best_conductances = merged["best_conductances"]
+        # if merged["best_error"] is None:
+        #     self.best_error = np.inf
+        # else:
+        #     self.best_error = merged["best_error"]
 
     '''
 	*****************************************************************************************************
@@ -191,55 +199,50 @@ class LearningCircuit(Circuit):
     def train(
         self,
         train_data: List[Tuple[np.ndarray, np.ndarray]],
-        n_epochs: int,
         update_fn,
         lr: float,
         modulating_f,
         *update_params, 
         verbose: bool = True,
-        save_state: bool = False,
-        save_global: bool = False,
-        save_path: str = 'trained_circuit',
-        save_every = 1) -> dict:
+        # save_state: bool = False,
+        # save_every = 200,
+        model_state_path='model_states/',
+        # conductance_path='conductances/',
+        print_every=100) -> dict:
 
-        it = tqdm(range(1, n_epochs + 1)) if verbose else range(1, n_epochs + 1)
         n_batches = len(train_data)
 
-        # Initial state stats of one peoch
-        if self.learning_step == 0:
+        if self.epoch == 0:
             indices = np.random.permutation(n_batches)
-            loss_acc, power_acc = 0.0, 0.0
+            loss_acc = 0.0
             for i in indices:
                 batch = train_data[i]
-                delta_k, loss, power = update_fn(self, batch, modulating_f, lr, *update_params)
+                delta_k, loss = update_fn(self, batch, modulating_f, lr, *update_params)
                 # stats
                 loss_acc += loss
-                power_acc += power
-                self.current_energy += power
-                if loss < self.best_error:
-                    self.best_error = loss
-                    self.best_conductances = self.conductances.copy()
-                if save_state:
-                    self.save_local(save_path+'_conductances.csv')
 
             loss_epoch = loss_acc / n_batches
-            power_epoch = power_acc / n_batches
-            self.current_power = power_epoch
-            self.loss_history.append(loss_epoch)
-            self.power_history.append(self.current_power)
-            self.energy_history.append(self.current_energy)
-            self.checkpoint_iterations.append(self.learning_step)
-            if save_state:
-                self.save_local(save_path+'_conductances.csv')
 
-        # training
-        for epoch in it:
+            if loss_epoch < self.best_error:
+                    self.best_error = loss_epoch
+                    self.best_conductances = self.conductances.copy()
+
+            if self.epoch in self.t_to_save:
+                self.loss_history.append(loss_epoch)
+                with open(model_state_path+"{}_t{}.pkl".format(self.model_name,self.epoch), "wb") as file:
+                    pickle.dump(self, file)
+                
+
+
+        while self.epoch < self.max_epochs:
             indices = np.random.permutation(n_batches)
-            loss_acc, power_acc = 0.0, 0.0
+            loss_acc = 0.0
+
+            start_time = time.time()
 
             for i in indices:
                 batch = train_data[i]
-                delta_k, loss, power = update_fn(self, batch, modulating_f, lr, *update_params)
+                delta_k, loss = update_fn(self, batch, modulating_f, lr, *update_params)
                 # apply & clip
                 self.conductances -= delta_k
                 clip = jnp.clip if self.jax else np.clip
@@ -249,45 +252,136 @@ class LearningCircuit(Circuit):
 
                 # stats
                 loss_acc += loss
-                power_acc += power
-                self.current_energy += power
-                if loss < self.best_error:
-                    self.best_error = loss
-                    self.best_conductances = self.conductances.copy()
-                self.learning_step += 1
+                # power_acc += power
+                # self.current_energy += power
 
             # end epoch
             loss_epoch = loss_acc / n_batches
-            power_epoch = power_acc / n_batches
-            self.current_power = power_epoch
+            if loss_epoch < self.best_error:
+                    self.best_error = loss_epoch
+                    self.best_conductances = self.conductances.copy()
+            self.epoch += 1
 
-            # save
-            if epoch % save_every == 0:
+            # save class instance
+            if self.epoch in self.t_to_save:
                 self.loss_history.append(loss_epoch)
-                self.power_history.append(self.current_power)
-                self.energy_history.append(self.current_energy)
-                self.checkpoint_iterations.append(self.learning_step)
-                if save_state:
-                    self.save_local(save_path+'_conductances.csv')
-            # self.loss_history.append(loss_epoch)
-            # self.power_history.append(self.current_power)
-            # self.energy_history.append(self.current_energy)
-            # self.checkpoint_iterations.append(self.learning_step)
-            if verbose:
-                it.set_description(f"Epoch {epoch}/{n_epochs} Loss={loss_epoch:.3e}")
-            # if save_state:
-            #     self.save_local(save_path+'_conductances.csv')
+                with open(model_state_path+"{}_t{}.pkl".format(self.model_name,self.epoch), "wb") as file:
+                    pickle.dump(self, file)
 
-        # end of training
-        if save_global:
-            self.save_global(save_path+'_global.json')
-            self.save_graph(save_path+'_graph.json')
+
+            if verbose and self.epoch % print_every == 0:
+                t = time.time()-start_time
+                print("Epoch: %d , train-err %.5g , time: %f"%(self.epoch, loss_epoch, t), flush=True)
+
         return {
-            'iterations': self.checkpoint_iterations,
+            'iterations': self.checkpoint_epochs,
             'loss': self.loss_history,
             'power': self.power_history,
             'energy': self.energy_history,
         }
+
+
+
+    # def train(
+    #     self,
+    #     train_data: List[Tuple[np.ndarray, np.ndarray]],
+    #     n_epochs: int,
+    #     update_fn,
+    #     lr: float,
+    #     modulating_f,
+    #     *update_params, 
+    #     verbose: bool = True,
+    #     save_state: bool = False,
+    #     save_global: bool = False,
+    #     save_path: str = 'trained_circuit',
+    #     save_every = 1) -> dict:
+
+    #     it = tqdm(range(1, n_epochs + 1)) if verbose else range(1, n_epochs + 1)
+    #     n_batches = len(train_data)
+
+    #     # Initial state stats of one peoch
+    #     if self.learning_step == 0:
+    #         indices = np.random.permutation(n_batches)
+    #         loss_acc, power_acc = 0.0, 0.0
+    #         for i in indices:
+    #             batch = train_data[i]
+    #             delta_k, loss, power = update_fn(self, batch, modulating_f, lr, *update_params)
+    #             # stats
+    #             loss_acc += loss
+    #             power_acc += power
+    #             self.current_energy += power
+    #             if loss < self.best_error:
+    #                 self.best_error = loss
+    #                 self.best_conductances = self.conductances.copy()
+    #             if save_state:
+    #                 self.save_local(save_path+'_conductances.csv')
+
+    #         loss_epoch = loss_acc / n_batches
+    #         power_epoch = power_acc / n_batches
+    #         self.current_power = power_epoch
+    #         self.loss_history.append(loss_epoch)
+    #         self.power_history.append(self.current_power)
+    #         self.energy_history.append(self.current_energy)
+    #         self.checkpoint_epochs.append(self.learning_step)
+    #         if save_state:
+    #             self.save_local(save_path+'_conductances.csv')
+
+    #     # training
+    #     for epoch in it:
+    #         indices = np.random.permutation(n_batches)
+    #         loss_acc, power_acc = 0.0, 0.0
+
+    #         for i in indices:
+    #             batch = train_data[i]
+    #             delta_k, loss, power = update_fn(self, batch, modulating_f, lr, *update_params)
+    #             # apply & clip
+    #             self.conductances -= delta_k
+    #             clip = jnp.clip if self.jax else np.clip
+    #             self.conductances = clip(
+    #                 self.conductances, self.min_k, self.max_k
+    #             )
+
+    #             # stats
+    #             loss_acc += loss
+    #             power_acc += power
+    #             self.current_energy += power
+    #             if loss < self.best_error:
+    #                 self.best_error = loss
+    #                 self.best_conductances = self.conductances.copy()
+    #             self.learning_step += 1
+
+    #         # end epoch
+    #         loss_epoch = loss_acc / n_batches
+    #         power_epoch = power_acc / n_batches
+    #         self.current_power = power_epoch
+
+    #         # save
+    #         if epoch % save_every == 0:
+    #             self.loss_history.append(loss_epoch)
+    #             self.power_history.append(self.current_power)
+    #             self.energy_history.append(self.current_energy)
+    #             self.checkpoint_epochs.append(self.learning_step)
+    #             if save_state:
+    #                 self.save_local(save_path+'_conductances.csv')
+    #         # self.loss_history.append(loss_epoch)
+    #         # self.power_history.append(self.current_power)
+    #         # self.energy_history.append(self.current_energy)
+    #         # self.checkpoint_epochs.append(self.learning_step)
+    #         if verbose:
+    #             it.set_description(f"Epoch {epoch}/{n_epochs} Loss={loss_epoch:.3e}")
+    #         # if save_state:
+    #         #     self.save_local(save_path+'_conductances.csv')
+
+    #     # end of training
+    #     if save_global:
+    #         self.save_global(save_path+'_global.json')
+    #         self.save_graph(save_path+'_graph.json')
+    #     return {
+    #         'iterations': self.checkpoint_epochs,
+    #         'loss': self.loss_history,
+    #         'power': self.power_history,
+    #         'energy': self.energy_history,
+    #     }
 
 
 
@@ -330,14 +424,14 @@ class LearningCircuit(Circuit):
                 "n": self.n,
                 "ne": self.ne,
                 # "learning_rate": self.learning_rate,
-                "learning_step": self.learning_step,
+                "epoch": self.epoch,
                 "indices_inputs": to_json_compatible(self.indices_inputs),
                 "indices_outputs": to_json_compatible(self.indices_outputs),
                 "current_bool": to_json_compatible(self.current_bool),
                 "loss_history": to_json_compatible(self.loss_history),
                 "energy_history": to_json_compatible(self.energy_history),
                 "power_history": to_json_compatible(self.power_history),
-                "checkpoint_iterations": to_json_compatible(self.checkpoint_iterations),
+                "checkpoint_epochs": to_json_compatible(self.checkpoint_epochs),
                 "best_conductances": to_json_compatible(self.best_conductances),
                 "best_error": to_json_compatible(self.best_error),
             }
@@ -355,31 +449,31 @@ class LearningCircuit(Circuit):
     def save_local(self, path):
         ''' Save the current conductances in CSV format. '''
         # if the file already exists, append the conductances to the file
-        if self.learning_step == 0:
+        if self.epoch == 0:
             save_to_csv(path, self.conductances.tolist(), mode='w')
         else:
             save_to_csv(path, self.conductances.tolist())
 
         
-    @classmethod
-    def from_json(cls, path, graph, conductances):
-        data = json.load(open(path))
-        params = {k: data.get(k, default)
-                  for k, default in cls.DEFAULT_PARAMS.items()}
-        obj = cls(graph,
-                  conductances,
-                  **params)
-        # restore histories if present…
-        obj.loss_history          = data.get("loss_history", [])
-        obj.power_history         = data.get("power_history", [])
-        obj.energy_history        = data.get("energy_history", [])
-        obj.checkpoint_iterations = data.get("checkpoint_iterations", [])
-        obj.best_conductances     = np.array(data.get("best_conductances", conductances))
-        obj.best_error            = data.get("best_error", np.inf)
+    # @classmethod
+    # def from_json(cls, path, graph, conductances):
+    #     data = json.load(open(path))
+    #     params = {k: data.get(k, default)
+    #               for k, default in cls.DEFAULT_PARAMS.items()}
+    #     obj = cls(graph,
+    #               conductances,
+    #               **params)
+    #     # restore histories if present…
+    #     obj.loss_history          = data.get("loss_history", [])
+    #     obj.power_history         = data.get("power_history", [])
+    #     obj.energy_history        = data.get("energy_history", [])
+    #     obj.checkpoint_epochs = data.get("checkpoint_epochs", [])
+    #     obj.best_conductances     = np.array(data.get("best_conductances", conductances))
+    #     obj.best_error            = data.get("best_error", np.inf)
 
-        _ = obj.set_inputs(obj.indices_inputs, obj.current_bool)
-        _ = obj.set_outputs(obj.indices_outputs)
-        return obj
+    #     _ = obj.set_inputs(obj.indices_inputs, obj.current_bool)
+    #     _ = obj.set_outputs(obj.indices_outputs)
+    #     return obj
 
 
     '''
@@ -483,9 +577,9 @@ def lc_from_json(jsonfile_global, jsonfile_graph, csv_local=None, new_train=Fals
     conductances = array_type.array(conductances)
 
     # Manage training-related data
-    training_defaults = {'loss_history': None, 'energy_history': None, 'power_history': None, 'checkpoint_iterations': None, 'learning_step': 0}
+    training_defaults = {'loss_history': None, 'energy_history': None, 'power_history': None, 'checkpoint_epochs': None, 'learning_step': 0}
     if not new_train:
-        training_data = {key: data_global[key] for key in ['loss_history', 'energy_history', 'power_history', 'checkpoint_iterations', 'learning_step']}
+        training_data = {key: data_global[key] for key in ['loss_history', 'energy_history', 'power_history', 'checkpoint_epochs', 'learning_step']}
     else:
         training_data = training_defaults
 
@@ -502,7 +596,7 @@ def lc_from_json(jsonfile_global, jsonfile_graph, csv_local=None, new_train=Fals
         max_k = data_global['max_k'],
         jax = use_jax,
         loss_history = training_data['loss_history'],
-        checkpoint_iterations = training_data['checkpoint_iterations'],
+        checkpoint_epochs = training_data['checkpoint_epochs'],
         power_history = training_data['power_history'],
         energy_history = training_data['energy_history'],
         best_conductances = get_array(data_global, 'best_conductances', None, use_jax),
