@@ -274,10 +274,7 @@ class LearningCircuit(Circuit):
                 print("Epoch: %d , train-err %.5g , time: %f"%(self.epoch, loss_epoch, t), flush=True)
 
         return {
-            'iterations': self.checkpoint_epochs,
             'loss': self.loss_history,
-            'power': self.power_history,
-            'energy': self.energy_history,
         }
 
 
