@@ -88,6 +88,7 @@ class LearningCircuit(Circuit):
         self.max_epochs = merged["max_epochs"]
         self.num_saves = merged["num_saves"]
         self.model_type = merged["model_type"]
+        self.epsilon = 1e-6
 
         # initial values
         self.epoch = 0
@@ -245,10 +246,20 @@ class LearningCircuit(Circuit):
                 delta_k, loss = update_fn(self, batch, modulating_f, lr, *update_params)
                 # apply & clip
                 self.conductances -= delta_k
+                # clip = jnp.clip if self.jax else np.clip
+                # self.conductances = clip(
+                #     self.conductances, self.min_k, self.max_k
+                # )
                 clip = jnp.clip if self.jax else np.clip
-                self.conductances = clip(
-                    self.conductances, self.min_k, self.max_k
+                sign = jnp.sign if self.jax else np.sign
+
+                self.conductances = clip(self.conductances, self.min_k, self.max_k)
+                self.conductances = jnp.where(
+                    (self.conductances > -self.epsilon) & (self.conductances < self.epsilon),
+                    sign(self.conductances) * self.epsilon,
+                    self.conductances
                 )
+
 
                 # stats
                 loss_acc += loss
