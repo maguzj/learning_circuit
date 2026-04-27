@@ -187,3 +187,84 @@ def cl_update_ferro_antiferro(
     loss = float(np.mean(0.5 * (y_free - targets)**2))
     # power = 0 # float(np.mean(circuit.conductances * (vd_free**2)))
     return delta_k, loss
+
+
+def cl_natural_update(
+    circuit: LearningCircuit,
+    batch: Tuple[np.ndarray, np.ndarray],
+    modulating_f,
+    lr: float,
+    eta:float) -> Tuple[np.ndarray, float, float]:
+    """
+    Coupled Learning update rule.
+    """
+
+    circuit_batch = (circuit_input_batch(circuit.jax, batch[0], circuit.indices_inputs, circuit.current_bool, circuit.n), batch[1])
+    inputs, targets = circuit_batch
+
+    # free phase
+    states_free = circuit.solve_batch(circuit.Q_inputs,inputs)
+    y_free = np.dot(states_free, circuit.Q_outputs.toarray())
+    # clamped phase
+    nudge = y_free + eta * (targets - y_free)
+    clamped_inputs = np.concatenate((inputs, nudge), axis=1)
+
+    if not hasattr(circuit, 'Q_clamped'):
+        circuit.Q_clamped = hstack([circuit.Q_inputs, circuit.Q_outputs])
+
+    states_clamped = circuit.solve_batch(circuit.Q_clamped, clamped_inputs)
+
+    # voltage drops
+    vd_free = np.dot(states_free,circuit.incidence_matrix.toarray())
+    vd_clamped = np.dot(states_clamped,circuit.incidence_matrix.toarray())
+    # delta conductances
+    delta_k = lr*(1/eta) * ((vd_clamped - vd_free).mean(axis=0))/(vd_free.mean(axis=0))*modulating_f(circuit.conductances)
+    # logging
+    loss = float(np.mean(0.5 * (y_free - targets)**2))
+    # power = 0 #float(np.mean(circuit.conductances * (vd_free**2)))
+    return delta_k, loss
+
+
+def cl_natural_update_rk4(
+    circuit: LearningCircuit,
+    batch: Tuple[np.ndarray, np.ndarray],
+    modulating_f,
+    lr: float,
+    eta: float) -> Tuple[np.ndarray, float, float]:
+    """
+    Runge-Kutta 4 integration of cl_natural_update.
+    """
+
+    circuit_batch = (circuit_input_batch(circuit.jax, batch[0], circuit.indices_inputs, circuit.current_bool, circuit.n), batch[1])
+    inputs, targets = circuit_batch
+
+    if not hasattr(circuit, 'Q_clamped'):
+        circuit.Q_clamped = hstack([circuit.Q_inputs, circuit.Q_outputs])
+
+    incidence_dense = circuit.incidence_matrix.toarray()
+    q_outputs_dense = circuit.Q_outputs.toarray()
+    base_conductances = circuit.conductances
+
+    def rk4_stage(conductances, compute_loss: bool = False):
+        circuit.conductances = conductances
+        states_free = circuit.solve_batch(circuit.Q_inputs, inputs)
+        y_free = np.dot(states_free, q_outputs_dense)
+        nudge = y_free + eta * (targets - y_free)
+        clamped_inputs = np.concatenate((inputs, nudge), axis=1)
+        states_clamped = circuit.solve_batch(circuit.Q_clamped, clamped_inputs)
+        vd_free = np.dot(states_free, incidence_dense)
+        vd_clamped = np.dot(states_clamped, incidence_dense)
+        grad = (1/eta) * ((vd_clamped - vd_free).mean(axis=0)) / (vd_free.mean(axis=0))
+        grad *= modulating_f(conductances)
+        loss_val = float(np.mean(0.5 * (y_free - targets)**2)) if compute_loss else None
+        return grad, loss_val
+
+    k1, loss = rk4_stage(base_conductances, compute_loss=True)
+    half_lr = 0.5 * lr
+    k2, _ = rk4_stage(base_conductances - half_lr * k1)
+    k3, _ = rk4_stage(base_conductances - half_lr * k2)
+    k4, _ = rk4_stage(base_conductances - lr * k3)
+
+    circuit.conductances = base_conductances
+    delta_k = (lr / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+    return delta_k, loss

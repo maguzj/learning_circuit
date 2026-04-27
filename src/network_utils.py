@@ -76,3 +76,42 @@ def network_from_json(filename):
 #             "nodes":list(graph.nodes),
 #             "pts":pts.tolist(),
 #             "edges":list(graph.edges)},f)
+
+
+def create_custom_network(n, edges, positions=None):
+    """
+    Create and plot a custom network.
+
+    Parameters
+    ----------
+    n : int
+        Number of nodes.
+    edges : list of tuples
+        List of edges, e.g. [(0, 1), (1, 2)].
+    positions : dict, optional
+        Dictionary of node positions, e.g. {0: (0, 0), 1: (1, 0)}.
+        If not provided, positions are generated automatically.
+
+    Returns
+    -------
+    G : networkx.Graph
+        The created networkx graph.
+    pos : dict
+        Node positions.
+    """
+    # Create an empty graph
+    G = nx.Graph()
+
+    # Add nodes and edges
+    G.add_nodes_from(range(n))
+    G.add_edges_from(edges)
+
+    # Set node positions
+    if positions is None:
+        pos = nx.spring_layout(G, seed=42)  # automatic layout
+    else:
+        pos = positions
+        for node in G.nodes:
+            G.nodes[node]['pos'] = pos[node]
+
+    return G, pos
