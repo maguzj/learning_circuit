@@ -9,6 +9,7 @@ from typing import List, Tuple
 from utils import *
 import pickle
 import time
+import os
 
 
 
@@ -91,10 +92,15 @@ class LearningCircuit(Circuit):
         self.epsilon = 1e-6
 
         # initial values
-        self.epoch = 0
-        self.best_conductances = self.conductances
-        self.best_error = np.inf
-        self.loss_history = []
+        self.loss_history = [] if merged["loss_history"] is None else list(merged["loss_history"])
+        self.checkpoint_epochs = [] if merged["checkpoint_epochs"] is None else list(merged["checkpoint_epochs"])
+        self.power_history = [] if merged["power_history"] is None else list(merged["power_history"])
+        self.energy_history = [] if merged["energy_history"] is None else list(merged["energy_history"])
+        self.epoch = self.checkpoint_epochs[-1] if self.checkpoint_epochs else 0
+        self.best_conductances = self.conductances if merged["best_conductances"] is None else _asarray(merged["best_conductances"])
+        self.best_error = np.inf if merged["best_error"] is None else merged["best_error"]
+        self.current_power = self.power_history[-1] if self.power_history else 0.0
+        self.current_energy = self.energy_history[-1] if self.energy_history else 0.0
 
         # Epochs at which to store the model
         self.t_to_save = sorted(
@@ -212,6 +218,7 @@ class LearningCircuit(Circuit):
         print_every=100) -> dict:
 
         n_batches = len(train_data)
+        os.makedirs(model_state_path, exist_ok=True)
 
         if self.epoch == 0:
             indices = np.random.permutation(n_batches)
@@ -427,6 +434,8 @@ class LearningCircuit(Circuit):
             # Dictionary comprehension to clean and convert data
             dic = {
                 "version": self.VERSION,
+                "model_name": self.model_name,
+                "name": self.model_name,
                 # dump all the DEFAULT_PARAMS (in case they changed from default)
                 **{k: getattr(self, k) for k in self.DEFAULT_PARAMS},
                 "n": self.n,
@@ -584,42 +593,47 @@ def lc_from_json(jsonfile_global, jsonfile_graph, csv_local=None, new_train=Fals
     array_type = jnp if use_jax else np
     conductances = array_type.array(conductances)
 
-    # Manage training-related data
-    training_defaults = {'loss_history': None, 'energy_history': None, 'power_history': None, 'checkpoint_epochs': None, 'learning_step': 0}
-    if not new_train:
-        training_data = {key: data_global[key] for key in ['loss_history', 'energy_history', 'power_history', 'checkpoint_epochs', 'learning_step']}
+    if new_train:
+        loss_history = None
+        energy_history = None
+        power_history = None
+        checkpoint_epochs = None
+        best_conductances = None
+        best_error = None
     else:
-        training_data = training_defaults
+        loss_history = data_global.get('loss_history')
+        energy_history = data_global.get('energy_history')
+        power_history = data_global.get('power_history')
+        checkpoint_epochs = data_global.get('checkpoint_epochs')
+        best_conductances = get_array(data_global, 'best_conductances', None, use_jax)
+        best_error = data_global.get('best_error')
 
     # Task-specific settings
     indices_inputs = get_array(data_global, 'indices_inputs', None, use_jax)
     indices_outputs = get_array(data_global, 'indices_outputs', None, use_jax)
+    model_name = data_global.get('model_name', data_global.get('name', 'loaded_circuit'))
 
     # Create the LearningCircuit object
     circuit = LearningCircuit(
         graph,
         conductances,
-        name = data_global['name'],
+        model_name,
         min_k = data_global['min_k'],
         max_k = data_global['max_k'],
         jax = use_jax,
-        loss_history = training_data['loss_history'],
-        checkpoint_epochs = training_data['checkpoint_epochs'],
-        power_history = training_data['power_history'],
-        energy_history = training_data['energy_history'],
-        best_conductances = get_array(data_global, 'best_conductances', None, use_jax),
-        best_error = data_global.get('best_error')
+        loss_history = loss_history,
+        checkpoint_epochs = checkpoint_epochs,
+        power_history = power_history,
+        energy_history = energy_history,
+        best_conductances = best_conductances,
+        best_error = best_error,
+        model_type = data_global.get('model_type', LearningCircuit.DEFAULT_PARAMS["model_type"]),
         )
     
-    # Set some attributes
-    # circuit.learning_rate = data_global['learning_rate']
-
-
     # Set task
     current_bool = get_array(data_global, 'current_bool', None, use_jax)
     _ = circuit.set_inputs(indices_inputs, current_bool)
     _ = circuit.set_outputs(indices_outputs)
+    circuit.epoch = data_global.get('epoch', circuit.epoch)
 
     return circuit
-
-
